@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("類 TradingView 畫線工具、均線、MACD、斐波那契、隨機股票、買入賣出；設定以每位使用者的 session / browser localStorage 保存。")
+st.caption("V10：修正按下一根後 MA 指標消失；指標面板先渲染再執行重播，設定仍以每位使用者的 session / browser localStorage 保存。")
 st.markdown("---")
 
 # =========================================================
@@ -165,6 +165,8 @@ def init_session_state() -> None:
         "avg_cost": 0.0,
         "realized_pnl": 0.0,
         "pending_new_challenge": False,
+        "persisted_selected_indicators": DEFAULT_SETTINGS["selected_indicators"].copy(),
+        "persisted_show_macd": DEFAULT_SETTINGS["show_macd"],
         "last_loaded_ticker": "",
         "last_yfinance_error": "",
     }
@@ -187,11 +189,25 @@ def init_session_state() -> None:
             if key not in st.session_state:
                 st.session_state[key] = indicator in selected
 
+        st.session_state.persisted_selected_indicators = [name for name in INDICATOR_OPTIONS if name in selected]
+        st.session_state.persisted_show_macd = bool(loaded.get("show_macd", DEFAULT_SETTINGS["show_macd"]))
         st.session_state.settings_initialized = True
 
 
 def collect_current_settings() -> dict[str, Any]:
-    selected_indicators = [name for name in INDICATOR_OPTIONS if st.session_state.get(f"setting_indicator_{name}", False)]
+    indicator_keys = [f"setting_indicator_{name}" for name in INDICATOR_OPTIONS]
+    has_any_indicator_key = any(key in st.session_state for key in indicator_keys)
+
+    if has_any_indicator_key:
+        selected_indicators = [
+            name for name in INDICATOR_OPTIONS
+            if st.session_state.get(f"setting_indicator_{name}", False)
+        ]
+    else:
+        selected_indicators = st.session_state.get(
+            "persisted_selected_indicators",
+            DEFAULT_SETTINGS["selected_indicators"],
+        )
 
     return {
         "mode": st.session_state.get("setting_mode", DEFAULT_SETTINGS["mode"]),
@@ -744,7 +760,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V7-cloud（每位使用者用 session/localStorage 保存設定，不寫伺服器 JSON）")
+    st.caption("目前版本：V10-indicator-stable（按下一根不會清掉 MA/EMA/VWAP 指標）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習"], key="setting_mode")
 
@@ -846,6 +862,30 @@ g4.metric("目前時間", show_time)
 st.progress(min(max(bars_passed / max(bars_total, 1), 0), 1))
 
 # =========================================================
+# 9.5 Indicator Checkboxes
+# =========================================================
+st.markdown("#### 📊 指標設定")
+st.caption("指標面板放在重播控制上方：按「下一根」前會先渲染 checkbox，所以 MA/EMA/VWAP 不會被 Streamlit 清掉。每位使用者設定仍儲存在自己的 session / browser localStorage。")
+
+indicator_cols = st.columns(8)
+for idx, indicator in enumerate(INDICATOR_OPTIONS):
+    with indicator_cols[idx]:
+        st.checkbox(indicator, key=f"setting_indicator_{indicator}")
+
+show_macd = st.checkbox("顯示 MACD", key="setting_show_macd")
+selected_indicators = [
+    name for name in INDICATOR_OPTIONS
+    if st.session_state.get(f"setting_indicator_{name}", False)
+]
+
+# 保險備份：即使某次 rerun 有 widget 沒渲染，也可用上一輪指標設定復原。
+st.session_state.persisted_selected_indicators = selected_indicators.copy()
+st.session_state.persisted_show_macd = bool(show_macd)
+
+settings_now = collect_current_settings()
+persist_settings_to_browser(settings_now)
+
+# =========================================================
 # 10. Replay Control
 # =========================================================
 st.markdown("### 🕹️ 重播控制")
@@ -931,23 +971,6 @@ with t5:
         else:
             st.error(msg)
         st.rerun()
-
-# =========================================================
-# 12. Indicator Checkboxes
-# =========================================================
-st.markdown("#### 📊 指標設定")
-st.caption("每位使用者的勾選會儲存在自己的瀏覽器 localStorage；不再寫入伺服器 JSON，所以多人部署時不會互相覆蓋。")
-
-indicator_cols = st.columns(8)
-for idx, indicator in enumerate(INDICATOR_OPTIONS):
-    with indicator_cols[idx]:
-        st.checkbox(indicator, key=f"setting_indicator_{indicator}")
-
-show_macd = st.checkbox("顯示 MACD", key="setting_show_macd")
-selected_indicators = [name for name in INDICATOR_OPTIONS if st.session_state.get(f"setting_indicator_{name}", False)]
-
-settings_now = collect_current_settings()
-persist_settings_to_browser(settings_now)
 
 # =========================================================
 # 13. Chart
