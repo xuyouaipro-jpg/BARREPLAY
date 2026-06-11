@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V20 battle live sync: fullscreen chart overlay + synchronized room timer
+# Deployment version：V21 battle room cleanup + host kick
 
 import base64
 import hashlib
@@ -33,7 +33,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V20：對戰開始後自動進入K線專注模式，房間狀態/玩家列表/倒數時間自動同步，所有玩家依房間開始時間同時開局與結束。")
+st.caption("V21：對戰房間新增手動刷新自動離房、防重複加入、房主踢人；保留即時同步與全房同步倒數。")
 st.markdown("---")
 
 # =========================================================
@@ -55,7 +55,9 @@ BATTLE_MAX_QUESTION_COUNT = 10
 BATTLE_DEFAULT_TIME_LIMIT_MINUTES = 8
 BATTLE_MIN_TIME_LIMIT_MINUTES = 1
 BATTLE_MAX_TIME_LIMIT_MINUTES = 30
-BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v20.json")
+BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v21.json")
+BATTLE_MEMBERSHIP_KEY = "barreplay_battle_membership_v21"
+BATTLE_INTERNAL_RELOAD_KEY = "barreplay_internal_reload_v21"
 BATTLE_DEFAULT_POOL_TEXT = "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409"
 
 DEFAULT_SETTINGS = {
@@ -183,13 +185,14 @@ def install_battle_live_sync(enabled: bool, seconds: float = 1.0) -> None:
         (function() {{
             const delayMs = {int(seconds * 1000)};
             const parentWindow = window.parent;
-            const timerKey = "__barreplay_battle_live_sync_timer_v20";
+            const timerKey = "__barreplay_battle_live_sync_timer_v21";
             if (parentWindow[timerKey]) {{
                 clearTimeout(parentWindow[timerKey]);
             }}
             parentWindow[timerKey] = setTimeout(function() {{
                 try {{
                     const url = new URL(parentWindow.location.href);
+                    try {{ parentWindow.localStorage.setItem("barreplay_internal_reload_v21", String(Date.now())); }} catch (e) {{}}
                     url.searchParams.set("battle_live_tick", String(Date.now()));
                     parentWindow.location.replace(url.toString());
                 }} catch (e) {{
@@ -212,9 +215,9 @@ def install_battle_focus_mode(enabled: bool) -> None:
         <script>
         (function(){
             const doc = window.parent.document;
-            if (!doc.getElementById('barreplay-battle-focus-style-v20')) {
+            if (!doc.getElementById('barreplay-battle-focus-style-v21')) {
                 const style = doc.createElement('style');
-                style.id = 'barreplay-battle-focus-style-v20';
+                style.id = 'barreplay-battle-focus-style-v21';
                 style.innerHTML = `
                     header[data-testid="stHeader"]{display:none!important;}
                     div[data-testid="stToolbar"]{display:none!important;}
@@ -261,6 +264,7 @@ def init_session_state() -> None:
         "battle_room_owner": False,
         "battle_room_notice": "",
         "battle_session_id": str(uuid.uuid4()),
+        "battle_kicked_notice": "",
     }
 
     for key, value in core_defaults.items():
@@ -641,6 +645,9 @@ def join_battle_room(room_code: str, player_name: str, interval_label: str, chal
         return False, f"找不到房間 {room}，請確認房號或先建立房間。"
 
     room_data = rooms[room]
+    kicked = room_data.get("kicked_players", {}) if isinstance(room_data.get("kicked_players", {}), dict) else {}
+    if player in kicked:
+        return False, f"你已被房主移出房間 {room}，不能重新加入。"
     if not is_battle_room_waiting(room_data):
         return False, f"房間 {room} 已經開始，為了公平不能中途加入。"
 
@@ -713,6 +720,12 @@ def register_battle_presence(room_code: str, player_name: str, interval_label: s
     player = normalize_player_name(player_name)
     if not is_valid_player_name(player):
         return
+    if is_player_kicked(room, player):
+        st.session_state.battle_room_joined = False
+        st.session_state.battle_joined_room_code = ""
+        st.session_state.battle_room_owner = False
+        st.session_state.battle_kicked_notice = f"你已被房主移出房間 {room}。"
+        return
     now = _utc_now_iso()
     session_id = str(st.session_state.get("battle_session_id", "")) or str(uuid.uuid4())
     st.session_state.battle_session_id = session_id
@@ -759,12 +772,17 @@ def register_battle_presence(room_code: str, player_name: str, interval_label: s
 def is_player_joined_room(room_code: str, player_name: str) -> bool:
     room = normalize_room_code(room_code)
     player = normalize_player_name(player_name)
-    return (
+    if not (
         bool(st.session_state.get("battle_room_joined", False))
         and st.session_state.get("battle_joined_room_code", "") == room
         and normalize_player_name(st.session_state.get("battle_player_name", player)) == player
         and is_valid_player_name(player)
-    )
+    ):
+        return False
+    room_data = get_battle_room_meta(room)
+    players = room_data.get("players", {}) if isinstance(room_data, dict) else {}
+    kicked = room_data.get("kicked_players", {}) if isinstance(room_data, dict) else {}
+    return player in players and player not in kicked
 
 
 def build_battle_room_players_df(room_code: str) -> pd.DataFrame:
@@ -970,7 +988,177 @@ def get_battle_winner_summary(room_code: str) -> dict[str, Any]:
     }
 
 
+def remove_battle_player(room_code: str, player_name: str, session_id: str | None = None, reason: str = "refresh") -> tuple[bool, str]:
+    """從房間移除玩家，避免同一瀏覽器重新整理後留下舊玩家紀錄；房主踢人也共用此函式。"""
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    if not room or not player:
+        return False, "房間或玩家名稱不完整。"
+
+    state = load_battle_state()
+    room_data = state.get("rooms", {}).get(room)
+    if not isinstance(room_data, dict):
+        return False, f"找不到房間 {room}。"
+
+    players = room_data.setdefault("players", {})
+    active_players = room_data.setdefault("active_players", {})
+    existed = player in players or player in active_players
+
+    old_session = ""
+    try:
+        old_session = str(active_players.get(player, {}).get("session_id", ""))
+    except Exception:
+        old_session = ""
+
+    # refresh cleanup 通常帶有舊 session_id；如果 active session 已經不同，仍允許清除同名舊玩家，避免殘留。
+    if player in active_players:
+        active_players.pop(player, None)
+    if player in players:
+        players.pop(player, None)
+
+    now = _utc_now_iso()
+    removed = room_data.setdefault("removed_players", {})
+    removed[player] = {
+        "player_name": player,
+        "removed_at": now,
+        "reason": reason,
+        "session_id": str(session_id or old_session),
+    }
+
+    if reason == "kicked":
+        kicked = room_data.setdefault("kicked_players", {})
+        kicked[player] = {
+            "player_name": player,
+            "kicked_at": now,
+            "reason": "房主移出房間",
+        }
+
+    room_data["updated_at"] = now
+    save_battle_state(state)
+    if existed:
+        return True, f"已將 {player} 從房間 {room} 移除。"
+    return True, f"{player} 不在房間 {room} 內，已清理殘留狀態。"
+
+
+def kick_battle_player(room_code: str, owner_name: str, target_player_name: str) -> tuple[bool, str]:
+    room = normalize_room_code(room_code)
+    owner = normalize_player_name(owner_name)
+    target = normalize_player_name(target_player_name)
+    if not target:
+        return False, "請選擇要踢出的玩家。"
+
+    state = load_battle_state()
+    room_data = state.get("rooms", {}).get(room)
+    if not isinstance(room_data, dict):
+        return False, "找不到房間。"
+    if room_data.get("created_by", "") != owner:
+        return False, "只有房主可以踢出玩家。"
+    if target == owner:
+        return False, "不能踢出房主自己。"
+
+    ok, msg = remove_battle_player(room, target, reason="kicked")
+    return ok, f"已踢出玩家：{target}" if ok else msg
+
+
+def is_player_kicked(room_code: str, player_name: str) -> bool:
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    room_data = get_battle_room_meta(room)
+    kicked = room_data.get("kicked_players", {}) if isinstance(room_data, dict) else {}
+    return player in kicked
+
+
+def handle_refresh_cleanup_from_query() -> None:
+    """若瀏覽器手動重新整理造成新 session，先移除 localStorage 記錄的舊房間成員。"""
+    room = st.query_params.get("br_cleanup_room")
+    player = st.query_params.get("br_cleanup_player")
+    old_session = st.query_params.get("br_cleanup_session")
+    cleanup_for = st.query_params.get("br_cleanup_for_session")
+    current_session = str(st.session_state.get("battle_session_id", ""))
+    if not room or not player or not cleanup_for or cleanup_for != current_session:
+        return
+    done_key = f"battle_refresh_cleanup_done__{cleanup_for}"
+    if st.session_state.get(done_key):
+        return
+    remove_battle_player(room, player, session_id=old_session, reason="refresh")
+    st.session_state[done_key] = True
+    st.session_state.battle_room_joined = False
+    st.session_state.battle_joined_room_code = ""
+    st.session_state.battle_room_owner = False
+    st.session_state.battle_room_notice = "偵測到重新整理，已將你從原房間移除；請重新加入房間。"
+
+
+def install_refresh_cleanup_probe() -> None:
+    """前端偵測 localStorage 上一次加入的房間；若 session_id 改變，回傳給 Python 清除舊成員。"""
+    current_session = str(st.session_state.get("battle_session_id", ""))
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const parentWindow = window.parent;
+            const membershipKey = {json.dumps(BATTLE_MEMBERSHIP_KEY)};
+            const internalReloadKey = {json.dumps(BATTLE_INTERNAL_RELOAD_KEY)};
+            const currentSession = {json.dumps(current_session)};
+            try {{
+                const raw = parentWindow.localStorage.getItem(membershipKey);
+                if (!raw) return;
+                const old = JSON.parse(raw);
+                if (!old || !old.room || !old.player || !old.session_id) return;
+                if (old.session_id === currentSession) return;
+
+                const lastInternal = Number(parentWindow.localStorage.getItem(internalReloadKey) || "0");
+                const internalReloadRecently = lastInternal && ((Date.now() - lastInternal) < 5000);
+                if (internalReloadRecently) return;
+
+                const url = new URL(parentWindow.location.href);
+                if (url.searchParams.get("br_cleanup_for_session") === currentSession) return;
+                url.searchParams.set("br_cleanup_room", old.room);
+                url.searchParams.set("br_cleanup_player", old.player);
+                url.searchParams.set("br_cleanup_session", old.session_id);
+                url.searchParams.set("br_cleanup_for_session", currentSession);
+                url.searchParams.set("br_cleanup_ts", String(Date.now()));
+                parentWindow.location.replace(url.toString());
+            }} catch (e) {{
+                console.log("BARREPLAY refresh cleanup probe failed:", e);
+            }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def install_battle_membership_storage(room_code: str, player_name: str, joined: bool) -> None:
+    """把目前加入狀態寫入使用者瀏覽器；重新整理時用來清除舊房間成員。"""
+    session_id = str(st.session_state.get("battle_session_id", ""))
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    payload = {"room": room, "player": player, "session_id": session_id}
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const parentWindow = window.parent;
+            const membershipKey = {json.dumps(BATTLE_MEMBERSHIP_KEY)};
+            try {{
+                if ({json.dumps(bool(joined and room and player))}) {{
+                    parentWindow.localStorage.setItem(membershipKey, {json.dumps(json.dumps(payload, ensure_ascii=False), ensure_ascii=False)});
+                }} else {{
+                    parentWindow.localStorage.removeItem(membershipKey);
+                }}
+            }} catch (e) {{
+                console.log("BARREPLAY membership storage failed:", e);
+            }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
 init_session_state()
+handle_refresh_cleanup_from_query()
+install_refresh_cleanup_probe()
 install_browser_settings_restore()
 
 # =========================================================
@@ -1693,7 +1881,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V20_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V21_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -1705,7 +1893,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V20-battle-live-sync（倒數/玩家/開始狀態自動同步，K線左上顯示時間與損益）")
+    st.caption("目前版本：V21-room-clean-kick（重新整理自動離房、防重複加入、房主可踢人）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -1805,6 +1993,16 @@ with st.sidebar:
         room_started_now = is_battle_room_started(room_meta_now)
         room_owner_now = bool(room_meta_now) and room_meta_now.get("created_by", "") == requested_player_name
 
+        if is_player_kicked(requested_room_code, requested_player_name):
+            st.session_state.battle_room_joined = False
+            st.session_state.battle_joined_room_code = ""
+            st.session_state.battle_room_owner = False
+            st.session_state.battle_kicked_notice = f"你已被房主移出房間 {requested_room_code}。"
+            room_joined_now = False
+            room_owner_now = False
+            install_battle_membership_storage(requested_room_code, requested_player_name, False)
+            st.warning(st.session_state.battle_kicked_notice)
+
         if room_joined_now and room_owner_now and room_waiting_now:
             set_col, start_col = st.columns(2)
             with set_col:
@@ -1854,8 +2052,22 @@ with st.sidebar:
 
         if room_joined_now:
             st.success(f"目前已在房間：{requested_room_code}")
+            install_battle_membership_storage(requested_room_code, requested_player_name, True)
         else:
             st.warning("尚未加入這個房間。請先建立房間或加入房間。")
+            install_battle_membership_storage(requested_room_code, requested_player_name, False)
+
+        if room_joined_now and room_owner_now:
+            latest_room_for_kick = get_battle_room_meta(requested_room_code)
+            latest_players = latest_room_for_kick.get("players", {}) if isinstance(latest_room_for_kick, dict) else {}
+            kick_candidates = [p for p in latest_players.keys() if p != requested_player_name]
+            if kick_candidates:
+                st.markdown("##### 房主管理")
+                kick_target = st.selectbox("選擇要踢出的玩家", kick_candidates, key="battle_kick_target")
+                if st.button("🚫 踢出玩家", use_container_width=True):
+                    ok, msg = kick_battle_player(requested_room_code, requested_player_name, kick_target)
+                    st.session_state.battle_room_notice = msg
+                    st.rerun()
 
         if st.button("🔄 立即同步房間", use_container_width=True):
             if room_joined_now:
@@ -1900,6 +2112,13 @@ battle_room_code = normalize_room_code(st.session_state.get("battle_room_code", 
 battle_player_name = normalize_player_name(st.session_state.get("battle_player_name", ""))
 battle_room_meta = get_battle_room_meta(battle_room_code)
 battle_room_joined = is_player_joined_room(battle_room_code, battle_player_name)
+if mode == "對戰模式" and is_player_kicked(battle_room_code, battle_player_name):
+    st.session_state.battle_room_joined = False
+    st.session_state.battle_joined_room_code = ""
+    st.session_state.battle_room_owner = False
+    battle_room_joined = False
+    st.warning(f"你已被房主移出房間 {battle_room_code}。")
+    install_battle_membership_storage(battle_room_code, battle_player_name, False)
 battle_room_started = is_battle_room_started(battle_room_meta)
 battle_question_count = get_room_question_count_from_data(battle_room_meta)
 battle_time_limit_minutes = get_room_time_limit_from_data(battle_room_meta)
