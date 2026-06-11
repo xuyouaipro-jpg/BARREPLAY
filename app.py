@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V26 result modal + synced chart account overlay
+# Deployment version：V27 result modal buttons + rematch
 
 import base64
 import hashlib
@@ -39,7 +39,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V26：成績 / 獲勝改成彈窗式宣告；K 線左上角同步顯示可用現金、總資產、損益與持倉。")
+st.caption("V27：成績 / 獲勝彈窗新增確認與再來一局按鈕；確認可關閉彈窗，房主可直接在彈窗內開新局。")
 st.markdown("---")
 
 # =========================================================
@@ -1030,99 +1030,137 @@ def render_battle_winner_banner(winner_info: dict[str, Any], room_code: str, rou
     )
 
 
-def render_battle_result_modal(winner_info: dict[str, Any], leaderboard_df: pd.DataFrame, room_code: str, round_no: int) -> None:
-    """固定在畫面中央的成績 / 獲勝彈窗。用 CSS fixed，避免依賴 st.dialog 版本。"""
+def render_battle_result_modal(
+    winner_info: dict[str, Any],
+    leaderboard_df: pd.DataFrame,
+    room_code: str,
+    round_no: int,
+    can_rematch: bool = False,
+    player_name: str = "",
+) -> None:
+    """成績 / 獲勝彈窗。
+
+    V27：改用 st.dialog 顯示真正可互動的按鈕：
+    - ✅ 確認：只關閉本局結果彈窗。
+    - 🔁 再來一局：只有房主可按，會保留玩家並重開新局。
+
+    若部署環境的 Streamlit 沒有 st.dialog，則退回頁面內大卡片顯示。
+    """
     if not winner_info.get("has_winner"):
         return
 
-    winner = escape(str(winner_info.get("winner", "")))
+    modal_key = f"battle_result_modal_closed_{normalize_room_code(room_code)}_{int(round_no)}"
+    if st.session_state.get(modal_key, False):
+        return
+
+    winner = str(winner_info.get("winner", ""))
     profit = float(winner_info.get("winner_profit", 0.0))
     amount = float(winner_info.get("winner_amount", 0.0))
     margin = float(winner_info.get("margin", 0.0))
-    second = escape(str(winner_info.get("second", "")))
+    second = str(winner_info.get("second", ""))
     base_amount = float(winner_info.get("base_amount", 0.0))
-    profit_class = "profit-up" if profit >= 0 else "profit-down"
+    profit_class = "result-profit-up" if profit >= 0 else "result-profit-down"
+    margin_text = f"贏第二名 {escape(second)} {margin:,.0f} 元" if second else "目前只有一位完成者"
 
-    rows_html = ""
+    result_df = pd.DataFrame()
     if isinstance(leaderboard_df, pd.DataFrame) and not leaderboard_df.empty:
-        for _, row in leaderboard_df.head(6).iterrows():
-            rank = escape(str(row.get("排名", "")))
-            player = escape(str(row.get("玩家", "")))
-            completed = escape(str(row.get("完成題數", "")))
-            total_raw = row.get("總金額", np.nan)
-            try:
-                total = float(total_raw)
-            except Exception:
-                total = float("nan")
-            if np.isfinite(total):
-                total_text = f"{total:,.0f}"
-                p_text = f"{total - base_amount:+,.0f}"
-                p_class = "profit-up" if total - base_amount >= 0 else "profit-down"
-            else:
-                total_text = "未完成"
-                p_text = "—"
-                p_class = ""
-            rows_html += (
-                f"<tr><td>{rank}</td><td>{player}</td><td>{completed}</td>"
-                f"<td>{total_text}</td><td class='{p_class}'>{p_text}</td></tr>"
+        result_df = leaderboard_df.copy().head(10)
+        if "總金額" in result_df.columns:
+            result_df["總獲利"] = result_df["總金額"].apply(
+                lambda x: f"{float(x) - base_amount:+,.0f}" if pd.notna(x) else "—"
             )
+            result_df["總金額"] = result_df["總金額"].apply(
+                lambda x: f"{float(x):,.0f}" if pd.notna(x) else "—"
+            )
+        keep_cols = [col for col in ["排名", "玩家", "完成題數", "總金額", "總獲利", "平均報酬率%"] if col in result_df.columns]
+        result_df = result_df[keep_cols]
 
-    margin_text = f"贏第二名 {second} {margin:,.0f} 元" if second else "目前只有一位完成者"
-    modal_html = f"""
-    <div class="battle-result-modal">
-        <div class="battle-result-card">
-            <div class="modal-kicker">房間 {escape(str(room_code))}｜第 {round_no} 局最終成績</div>
-            <div class="modal-title">🏆 {winner} 獲勝！</div>
-            <div class="modal-profit {profit_class}">獲利 {profit:+,.0f} 元</div>
-            <div class="modal-sub">總金額 {amount:,.0f} 元｜{margin_text}</div>
-            <div class="modal-table-title">📊 房間成績排行</div>
-            <table class="modal-table">
-                <thead><tr><th>排名</th><th>玩家</th><th>完成題數</th><th>總金額</th><th>總獲利</th></tr></thead>
-                <tbody>{rows_html}</tbody>
-            </table>
-            <div class="modal-note">房主可在下方按「再來一局」。</div>
-        </div>
-    </div>
-    <style>
-    .battle-result-modal {{
-        position: fixed;
-        inset: 0;
-        z-index: 999999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
-        background: rgba(2, 6, 23, 0.56);
-        backdrop-filter: blur(3px);
-        pointer-events: none;
-    }}
-    .battle-result-card {{
-        width: min(900px, 92vw);
-        max-height: 86vh;
-        overflow: auto;
-        padding: 2.0rem 2.2rem;
-        border-radius: 26px;
-        text-align: center;
-        background: radial-gradient(circle at top left, rgba(255, 214, 102, 0.42), rgba(38, 54, 87, 0.96) 44%, rgba(8, 13, 24, 0.98));
-        border: 2px solid rgba(255, 214, 102, 0.78);
-        box-shadow: 0 0 70px rgba(255, 214, 102, 0.28), 0 22px 70px rgba(0,0,0,.5);
-        color: #f8fafc;
-    }}
-    .modal-kicker {{font-size: 1.05rem; color: #dbe4ff; margin-bottom: .35rem;}}
-    .modal-title {{font-size: clamp(2.6rem, 7vw, 5.4rem); font-weight: 950; line-height: 1.03; color: #fff3bf; text-shadow: 0 0 26px rgba(255,214,102,.35);}}
-    .modal-profit {{font-size: clamp(2.0rem, 5vw, 3.7rem); font-weight: 950; margin-top: .5rem;}}
-    .profit-up {{color:#69ff94;}}
-    .profit-down {{color:#ff7b7b;}}
-    .modal-sub {{font-size: 1.25rem; margin-top: .3rem; color: #f1f5f9;}}
-    .modal-table-title {{font-size: 1.05rem; font-weight: 800; text-align:left; margin-top: 1.35rem; margin-bottom: .45rem;}}
-    .modal-table {{width:100%; border-collapse: collapse; background: rgba(15, 23, 42, .42); border-radius: 12px; overflow:hidden;}}
-    .modal-table th, .modal-table td {{padding: .55rem .65rem; border-bottom: 1px solid rgba(255,255,255,.12); text-align: center;}}
-    .modal-table th {{color:#cbd5e1; background: rgba(15,23,42,.58);}}
-    .modal-note {{margin-top:.75rem; color:#cbd5e1; font-size:.95rem;}}
-    </style>
-    """
-    st.markdown(modal_html, unsafe_allow_html=True)
+    def _modal_body() -> None:
+        st.markdown(
+            f"""
+            <style>
+            .battle-result-dialog-card {{
+                text-align:center;
+                padding: 1.0rem 0.4rem 0.5rem 0.4rem;
+            }}
+            .battle-result-dialog-kicker {{
+                color:#64748b;
+                font-weight:800;
+                margin-bottom:.35rem;
+            }}
+            .battle-result-dialog-title {{
+                font-size: clamp(2.4rem, 7vw, 4.8rem);
+                font-weight: 950;
+                line-height: 1.04;
+                color: #ca8a04;
+                margin-bottom: .3rem;
+            }}
+            .battle-result-dialog-profit {{
+                font-size: clamp(1.8rem, 5vw, 3.2rem);
+                font-weight: 950;
+                margin-top: .15rem;
+            }}
+            .result-profit-up {{color:#16a34a;}}
+            .result-profit-down {{color:#dc2626;}}
+            .battle-result-dialog-sub {{
+                font-size: 1.1rem;
+                font-weight: 800;
+                color:#334155;
+                margin-top:.15rem;
+                margin-bottom: 1.0rem;
+            }}
+            </style>
+            <div class="battle-result-dialog-card">
+                <div class="battle-result-dialog-kicker">房間 {escape(str(room_code))}｜第 {int(round_no)} 局最終成績</div>
+                <div class="battle-result-dialog-title">🏆 {escape(winner)} 獲勝！</div>
+                <div class="battle-result-dialog-profit {profit_class}">獲利 {profit:+,.0f} 元</div>
+                <div class="battle-result-dialog-sub">總金額 {amount:,.0f} 元｜{margin_text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
+        if not result_df.empty:
+            st.markdown("#### 📊 房間成績排行")
+            st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+        btn_confirm, btn_rematch = st.columns(2)
+        with btn_confirm:
+            if st.button("✅ 確認，關閉彈窗", use_container_width=True, key=f"confirm_result_modal_{room_code}_{round_no}"):
+                st.session_state[modal_key] = True
+                st.rerun()
+
+        with btn_rematch:
+            if can_rematch:
+                if st.button("🔁 再來一局", type="primary", use_container_width=True, key=f"rematch_result_modal_{room_code}_{round_no}"):
+                    ok, msg = reset_battle_room_for_rematch(room_code, player_name)
+                    if ok:
+                        st.session_state[modal_key] = True
+                        st.session_state.battle_question_no = 1
+                        st.session_state.pending_new_challenge = True
+                        st.session_state.show_answer = False
+                        reset_account(float(st.session_state.get("setting_initial_cash", DEFAULT_SETTINGS["initial_cash"])))
+                    st.session_state.battle_room_notice = msg
+                    st.rerun()
+            else:
+                st.button("🔁 再來一局（房主）", use_container_width=True, disabled=True, key=f"rematch_result_modal_disabled_{room_code}_{round_no}")
+                st.caption("只有房主可以開新局。")
+
+    if hasattr(st, "dialog"):
+        @st.dialog("🏆 對戰結果", width="large")
+        def _battle_result_dialog() -> None:
+            _modal_body()
+
+        _battle_result_dialog()
+    else:
+        st.markdown(
+            """
+            <div style="padding:1.2rem;border-radius:18px;border:2px solid rgba(202,138,4,.5);background:rgba(254,243,199,.42);margin:1rem 0;">
+            """,
+            unsafe_allow_html=True,
+        )
+        _modal_body()
+        st.markdown("</div>", unsafe_allow_html=True)
 
 def remove_battle_player(room_code: str, player_name: str, session_id: str | None = None, reason: str = "refresh") -> tuple[bool, str]:
     """從房間移除玩家，避免同一瀏覽器重新整理後留下舊玩家紀錄；房主踢人也共用此函式。"""
@@ -2091,7 +2129,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V26-result-modal-overlay-sync（成績彈窗 / 獲勝彈窗 / K 線左上角帳戶同步）")
+    st.caption("目前版本：V27-result-modal-buttons（彈窗確認 / 再來一局 / K 線左上角帳戶同步）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2572,7 +2610,7 @@ if mode == "對戰模式":
     winner_info = get_battle_winner_summary(battle_room_code)
     if winner_info.get("has_winner"):
         if battle_game_over or winner_info.get("all_finished"):
-            render_battle_result_modal(winner_info, leaderboard_df, battle_room_code, battle_round_no)
+            render_battle_result_modal(winner_info, leaderboard_df, battle_room_code, battle_round_no, can_rematch=bool(st.session_state.get("battle_room_owner", False)), player_name=battle_player_name)
             st.success("🎉 對戰結束！" + winner_info.get("message", ""))
             balloon_key = f"battle_winner_balloons_{battle_room_code}_{battle_round_no}"
             if not st.session_state.get(balloon_key, False):
