@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V23 battle room stable restore + host kick
+# Deployment version：V25 rematch + winner banner + no auto fullscreen
 
 import base64
 import hashlib
@@ -38,7 +38,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V24：對戰同步改成 soft rerun，不再用 location.replace 整頁刷新；倒數改由前端即時更新。")
+st.caption("V25：新增再來一局、結束大字宣布勝者與獲利；取消圖表自動全螢幕。")
 st.markdown("---")
 
 # =========================================================
@@ -390,12 +390,22 @@ def get_room_time_limit_from_data(room_data: dict[str, Any] | None) -> int:
         return BATTLE_DEFAULT_TIME_LIMIT_MINUTES
 
 
-def build_battle_questions(room_code: str, interval_label: str, challenge_bars: int, question_count: int | None = None) -> list[dict[str, Any]]:
-    """用房間號碼與房間設定決定題目；同房號、同設定會拿到相同題目。"""
+def get_room_round_no_from_data(room_data: dict[str, Any] | None) -> int:
+    if not isinstance(room_data, dict):
+        return 1
+    try:
+        return max(1, int(room_data.get("round_no", 1)))
+    except Exception:
+        return 1
+
+
+def build_battle_questions(room_code: str, interval_label: str, challenge_bars: int, question_count: int | None = None, round_no: int = 1) -> list[dict[str, Any]]:
+    """用房間號碼、房間設定與局數決定題目；同房同局會拿到相同題目，再來一局會換題。"""
     room = normalize_room_code(room_code)
     q_count = int(np.clip(int(question_count or BATTLE_DEFAULT_QUESTION_COUNT), BATTLE_MIN_QUESTION_COUNT, BATTLE_MAX_QUESTION_COUNT))
+    round_no = max(1, int(round_no or 1))
     base_pool = parse_stock_codes(BATTLE_DEFAULT_POOL_TEXT)
-    rng = random.Random(stable_hash_int(f"BARREPLAY_BATTLE|{room}|{interval_label}|{challenge_bars}|QCOUNT{q_count}"))
+    rng = random.Random(stable_hash_int(f"BARREPLAY_BATTLE|{room}|ROUND{round_no}|{interval_label}|{challenge_bars}|QCOUNT{q_count}"))
 
     if len(base_pool) >= q_count:
         selected_codes = rng.sample(base_pool, q_count)
@@ -408,7 +418,7 @@ def build_battle_questions(room_code: str, interval_label: str, challenge_bars: 
             {
                 "question_no": idx,
                 "stock_code": code,
-                "seed": f"BARREPLAY_BATTLE|{room}|Q{idx}|{code}|{interval_label}|{challenge_bars}|QCOUNT{q_count}",
+                "seed": f"BARREPLAY_BATTLE|{room}|ROUND{round_no}|Q{idx}|{code}|{interval_label}|{challenge_bars}|QCOUNT{q_count}",
             }
         )
     return questions
@@ -489,6 +499,7 @@ def submit_battle_score(
             "status": "waiting",
             "question_count": BATTLE_DEFAULT_QUESTION_COUNT,
             "time_limit_minutes": BATTLE_DEFAULT_TIME_LIMIT_MINUTES,
+            "round_no": 1,
             "players": {},
             "active_players": {},
         },
@@ -609,6 +620,7 @@ def create_battle_room(
         "time_limit_minutes": int(np.clip(int(time_limit_minutes), BATTLE_MIN_TIME_LIMIT_MINUTES, BATTLE_MAX_TIME_LIMIT_MINUTES)),
         "initial_cash": float(initial_cash),
         "target_return_pct": float(target_return_pct),
+        "round_no": 1,
         "players": {},
         "active_players": {},
     }
@@ -735,6 +747,7 @@ def register_battle_presence(room_code: str, player_name: str, interval_label: s
     room_data.setdefault("challenge_bars", int(challenge_bars))
     room_data.setdefault("question_count", BATTLE_DEFAULT_QUESTION_COUNT)
     room_data.setdefault("time_limit_minutes", BATTLE_DEFAULT_TIME_LIMIT_MINUTES)
+    room_data.setdefault("round_no", 1)
     room_data.setdefault("status", "waiting")
     room_data.setdefault("active_players", {})[player] = {
         "player_name": player,
@@ -935,6 +948,8 @@ def get_battle_winner_summary(room_code: str) -> dict[str, Any]:
     room_data = get_battle_room_meta(room_code)
     question_count = get_room_question_count_from_data(room_data)
     players = room_data.get("players", {}) if isinstance(room_data, dict) else {}
+    initial_cash_per_question = float(room_data.get("initial_cash", DEFAULT_SETTINGS["initial_cash"])) if isinstance(room_data, dict) else float(DEFAULT_SETTINGS["initial_cash"])
+    base_amount = initial_cash_per_question * max(1, question_count)
     leaderboard = build_battle_leaderboard(room_code)
     if leaderboard.empty:
         return {"has_winner": False, "all_finished": False, "message": ""}
@@ -946,15 +961,16 @@ def get_battle_winner_summary(room_code: str) -> dict[str, Any]:
     completed_df = completed_df.sort_values("總金額", ascending=False).reset_index(drop=True)
     winner = str(completed_df.iloc[0]["玩家"])
     winner_amount = float(completed_df.iloc[0]["總金額"])
+    winner_profit = winner_amount - base_amount
     if len(completed_df) >= 2:
         second = str(completed_df.iloc[1]["玩家"])
         second_amount = float(completed_df.iloc[1]["總金額"])
         margin = winner_amount - second_amount
-        message = f"🏆 {winner} 獲勝，目前總金額 {winner_amount:,.0f} 元，贏第二名 {second} {margin:,.0f} 元。"
+        message = f"🏆 {winner} 獲勝，總金額 {winner_amount:,.0f} 元，獲利 {winner_profit:+,.0f} 元，贏第二名 {second} {margin:,.0f} 元。"
     else:
         second = ""
         margin = 0.0
-        message = f"🏆 {winner} 暫時領先，目前總金額 {winner_amount:,.0f} 元。"
+        message = f"🏆 {winner} 暫時領先，總金額 {winner_amount:,.0f} 元，獲利 {winner_profit:+,.0f} 元。"
 
     finished_players = 0
     for pdata in players.values():
@@ -967,10 +983,49 @@ def get_battle_winner_summary(room_code: str) -> dict[str, Any]:
         "all_finished": all_finished,
         "winner": winner,
         "winner_amount": winner_amount,
+        "winner_profit": winner_profit,
         "second": second,
         "margin": margin,
         "message": message,
     }
+
+
+def render_battle_winner_banner(winner_info: dict[str, Any], room_code: str, round_no: int) -> None:
+    if not winner_info.get("has_winner"):
+        return
+    winner = str(winner_info.get("winner", ""))
+    profit = float(winner_info.get("winner_profit", 0.0))
+    amount = float(winner_info.get("winner_amount", 0.0))
+    margin = float(winner_info.get("margin", 0.0))
+    profit_class = "winner-profit" if profit >= 0 else "winner-loss"
+    st.markdown(
+        f"""
+        <div class="battle-winner-banner">
+            <div class="battle-winner-room">房間 {room_code}｜第 {round_no} 局結束</div>
+            <div class="battle-winner-title">🏆 {winner} 獲勝！</div>
+            <div class="battle-winner-profit {profit_class}">獲利 {profit:+,.0f} 元</div>
+            <div class="battle-winner-sub">總金額 {amount:,.0f} 元｜贏第二名 {margin:,.0f} 元</div>
+        </div>
+        <style>
+        .battle-winner-banner {{
+            margin: 1.0rem 0 1.2rem 0;
+            padding: 2.0rem 1.5rem;
+            border-radius: 22px;
+            text-align: center;
+            background: radial-gradient(circle at top left, rgba(255, 214, 102, 0.35), rgba(38, 54, 87, 0.92) 45%, rgba(10, 14, 24, 0.96));
+            border: 2px solid rgba(255, 214, 102, 0.72);
+            box-shadow: 0 0 40px rgba(255, 214, 102, 0.22);
+        }}
+        .battle-winner-room {{font-size: 1.15rem; color: #d1d4dc; margin-bottom: 0.4rem;}}
+        .battle-winner-title {{font-size: 4.3rem; font-weight: 900; color: #fff3bf; line-height: 1.1; text-shadow: 0 0 24px rgba(255, 214, 102, 0.32);}}
+        .battle-winner-profit {{font-size: 3.0rem; font-weight: 900; margin-top: 0.5rem;}}
+        .winner-profit {{color:#64ff8a;}}
+        .winner-loss {{color:#ff6b6b;}}
+        .battle-winner-sub {{font-size: 1.35rem; color:#f1f3f5; margin-top: 0.45rem;}}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def remove_battle_player(room_code: str, player_name: str, session_id: str | None = None, reason: str = "refresh") -> tuple[bool, str]:
@@ -1023,6 +1078,42 @@ def remove_battle_player(room_code: str, player_name: str, session_id: str | Non
     if existed:
         return True, f"已將 {player} 從房間 {room} 移除。"
     return True, f"{player} 不在房間 {room} 內，已清理殘留狀態。"
+
+
+def reset_battle_room_for_rematch(room_code: str, owner_name: str) -> tuple[bool, str]:
+    """房主按「再來一局」：保留房間與玩家，清空成績並回到等待室，下一局會用新 round_no 產生新題目。"""
+    room = normalize_room_code(room_code)
+    owner = normalize_player_name(owner_name)
+    state = load_battle_state()
+    room_data = state.get("rooms", {}).get(room)
+    if not isinstance(room_data, dict):
+        return False, "找不到房間，無法再來一局。"
+    if room_data.get("created_by", "") != owner:
+        return False, "只有房主可以按再來一局。"
+
+    now = _utc_now_iso()
+    room_data["status"] = "waiting"
+    room_data["started_at"] = ""
+    room_data["started_by"] = ""
+    room_data["ended_at"] = ""
+    room_data["updated_at"] = now
+    room_data["round_no"] = get_room_round_no_from_data(room_data) + 1
+    room_data["sync_mode"] = "waiting_rematch_v25"
+
+    players = room_data.setdefault("players", {})
+    for pdata in players.values():
+        if isinstance(pdata, dict):
+            pdata["scores"] = {}
+            pdata["updated_at"] = now
+            pdata["last_seen"] = now
+
+    active_players = room_data.setdefault("active_players", {})
+    for pdata in active_players.values():
+        if isinstance(pdata, dict):
+            pdata["last_seen"] = now
+
+    save_battle_state(state)
+    return True, f"已開新一局：第 {room_data['round_no']} 局。請等待房主再次按開始對戰。"
 
 
 def kick_battle_player(room_code: str, owner_name: str, target_player_name: str) -> tuple[bool, str]:
@@ -1844,7 +1935,7 @@ document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLower
 window.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
 function updateBattleTimerText(){const el=document.getElementById("battleTimerText");if(!el)return;const deadline=Number(el.dataset.deadlineMs||"0");if(!deadline)return;const left=Math.max(0,Math.floor((deadline-Date.now())/1000));const m=String(Math.floor(left/60)).padStart(2,"0");const s=String(left%60).padStart(2,"0");el.textContent=(left<=0)?"00:00":`${m}:${s}`;if(left<=10){el.style.color="#ff5252";}}
 setInterval(updateBattleTimerText,1000);updateBattleTimerText();
-chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);if(focusMode){setTimeout(()=>{try{window.frameElement.scrollIntoView({behavior:"smooth",block:"start"});}catch(e){}},250);setTimeout(()=>{try{document.getElementById("wrap").requestFullscreen();}catch(e){}},600);}drawAll();
+chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);if(focusMode){setTimeout(()=>{try{window.frameElement.scrollIntoView({behavior:"smooth",block:"start"});}catch(e){}},250);}drawAll();
 </script>
 </body>
 </html>
@@ -1903,7 +1994,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V24-no-page-reload-sync（對戰同步不會跳出房間，支援房主踢人）")
+    st.caption("目前版本：V25-rematch-winner-banner（新增再來一局 / 大字勝者公告 / 取消自動全螢幕）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2055,6 +2146,18 @@ with st.sidebar:
             st.info("已加入房間，等待房主按『開始對戰』。")
         elif room_started_now:
             st.success("此房間已開始。")
+            latest_room_status = get_battle_room_meta(requested_room_code)
+            latest_time_status = get_global_battle_time_status(latest_room_status) if latest_room_status else {}
+            if room_owner_now and bool(latest_time_status.get("game_over", False)):
+                if st.button("🔁 再來一局", type="primary", use_container_width=True, key="battle_rematch_sidebar"):
+                    ok, msg = reset_battle_room_for_rematch(requested_room_code, requested_player_name)
+                    if ok:
+                        st.session_state.battle_question_no = 1
+                        st.session_state.pending_new_challenge = True
+                        st.session_state.show_answer = False
+                        reset_account(float(latest_room_status.get("initial_cash", DEFAULT_SETTINGS["initial_cash"])) if isinstance(latest_room_status, dict) else DEFAULT_SETTINGS["initial_cash"])
+                    st.session_state.battle_room_notice = msg
+                    st.rerun()
 
         if st.session_state.get("battle_room_notice"):
             if str(st.session_state.battle_room_notice).startswith("已") or "開始" in str(st.session_state.battle_room_notice) or "儲存" in str(st.session_state.battle_room_notice):
@@ -2209,7 +2312,8 @@ if mode == "對戰模式" and battle_room_started:
         st.session_state["battle_question_no"] = battle_question_no
 else:
     st.session_state["battle_question_no"] = battle_question_no
-battle_questions = build_battle_questions(battle_room_code, interval_label, challenge_bars, battle_question_count)
+battle_round_no = get_room_round_no_from_data(battle_room_meta)
+battle_questions = build_battle_questions(battle_room_code, interval_label, challenge_bars, battle_question_count, round_no=battle_round_no)
 battle_question = battle_questions[battle_question_no - 1]
 
 if mode == "對戰模式":
@@ -2329,7 +2433,7 @@ if mode == "對戰模式":
     b1, b2, b3, b4, b5, b6 = st.columns(6)
     b1.metric("房間號碼", battle_room_code)
     b2.metric("玩家", battle_player_name)
-    b3.metric("目前題目", f"{battle_question_no} / {battle_question_count}")
+    b3.metric("目前題目", f"{battle_question_no} / {battle_question_count}", delta=f"第 {battle_round_no} 局")
     b4.metric("本題期末金額", f"{total_equity:,.0f}")
     b5.metric("房間人數", f"{len(players_df)} 人", delta=f"在線 {online_count}")
     b6.metric("倒數時間", "結束" if battle_game_over else (str(battle_time_status["time_text"]) if battle_time_status else "--"))
@@ -2370,9 +2474,20 @@ if mode == "對戰模式":
 
     winner_info = get_battle_winner_summary(battle_room_code)
     if winner_info.get("has_winner"):
-        if winner_info.get("all_finished"):
+        if battle_game_over or winner_info.get("all_finished"):
+            render_battle_winner_banner(winner_info, battle_room_code, battle_round_no)
             st.success("🎉 對戰結束！" + winner_info.get("message", ""))
             st.balloons()
+            if st.session_state.get("battle_room_owner", False):
+                if st.button("🔁 再來一局", type="primary", use_container_width=True, key="battle_rematch_main_top"):
+                    ok, msg = reset_battle_room_for_rematch(battle_room_code, battle_player_name)
+                    if ok:
+                        st.session_state.battle_question_no = 1
+                        st.session_state.pending_new_challenge = True
+                        st.session_state.show_answer = False
+                        reset_account(initial_cash)
+                    st.session_state.battle_room_notice = msg
+                    st.rerun()
         else:
             st.info("目前戰況：" + winner_info.get("message", ""))
 
@@ -2549,7 +2664,7 @@ if chart_focus_mode:
     except Exception:
         deadline_ms = 0
     battle_overlay_html = (
-        f"<div>房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題</div>"
+        f"<div>房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題｜第 {battle_round_no} 局</div>"
         f"<div>剩餘時間</div><div class='big'><span id='battleTimerText' data-deadline-ms='{deadline_ms}'>{timer_text}</span></div>"
         f"<div>目前總資產：{total_equity:,.0f} 元</div>"
         f"<div>目前損益：<span class='{pnl_class}'>{total_equity - initial_cash:,.0f} 元（{return_pct:.2f}%）</span></div>"
