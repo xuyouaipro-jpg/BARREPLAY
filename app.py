@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V21 battle room cleanup + host kick
+# Deployment version：V22 battle join no-refresh + host kick
 
 import base64
 import hashlib
@@ -55,9 +55,9 @@ BATTLE_MAX_QUESTION_COUNT = 10
 BATTLE_DEFAULT_TIME_LIMIT_MINUTES = 8
 BATTLE_MIN_TIME_LIMIT_MINUTES = 1
 BATTLE_MAX_TIME_LIMIT_MINUTES = 30
-BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v21.json")
-BATTLE_MEMBERSHIP_KEY = "barreplay_battle_membership_v21"
-BATTLE_INTERNAL_RELOAD_KEY = "barreplay_internal_reload_v21"
+BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v22.json")
+BATTLE_MEMBERSHIP_KEY = "barreplay_battle_membership_v22"
+BATTLE_INTERNAL_RELOAD_KEY = "barreplay_internal_reload_v22"
 BATTLE_DEFAULT_POOL_TEXT = "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409"
 
 DEFAULT_SETTINGS = {
@@ -185,14 +185,14 @@ def install_battle_live_sync(enabled: bool, seconds: float = 1.0) -> None:
         (function() {{
             const delayMs = {int(seconds * 1000)};
             const parentWindow = window.parent;
-            const timerKey = "__barreplay_battle_live_sync_timer_v21";
+            const timerKey = "__barreplay_battle_live_sync_timer_v22";
             if (parentWindow[timerKey]) {{
                 clearTimeout(parentWindow[timerKey]);
             }}
             parentWindow[timerKey] = setTimeout(function() {{
                 try {{
                     const url = new URL(parentWindow.location.href);
-                    try {{ parentWindow.localStorage.setItem("barreplay_internal_reload_v21", String(Date.now())); }} catch (e) {{}}
+                    try {{ parentWindow.localStorage.setItem("barreplay_internal_reload_v22", String(Date.now())); }} catch (e) {{}}
                     url.searchParams.set("battle_live_tick", String(Date.now()));
                     parentWindow.location.replace(url.toString());
                 }} catch (e) {{
@@ -215,9 +215,9 @@ def install_battle_focus_mode(enabled: bool) -> None:
         <script>
         (function(){
             const doc = window.parent.document;
-            if (!doc.getElementById('barreplay-battle-focus-style-v21')) {
+            if (!doc.getElementById('barreplay-battle-focus-style-v22')) {
                 const style = doc.createElement('style');
-                style.id = 'barreplay-battle-focus-style-v21';
+                style.id = 'barreplay-battle-focus-style-v22';
                 style.innerHTML = `
                     header[data-testid="stHeader"]{display:none!important;}
                     div[data-testid="stToolbar"]{display:none!important;}
@@ -1100,6 +1100,27 @@ def install_refresh_cleanup_probe() -> None:
             const internalReloadKey = {json.dumps(BATTLE_INTERNAL_RELOAD_KEY)};
             const currentSession = {json.dumps(current_session)};
             try {{
+                // 重要：Streamlit 按鈕本身也會造成 rerun。
+                // 先監聽使用者點擊按鈕/輸入操作，把這類 rerun 標記為「App 內部更新」，
+                // 避免建立房間或加入房間後，被 refresh-cleanup 誤判成瀏覽器手動重新整理而踢出。
+                const guardKey = "__barreplay_internal_action_guard_v22";
+                if (!parentWindow[guardKey]) {{
+                    parentWindow[guardKey] = true;
+                    const markInternalAction = function() {{
+                        try {{ parentWindow.localStorage.setItem(internalReloadKey, String(Date.now())); }} catch (e) {{}}
+                    }};
+                    parentWindow.document.addEventListener("click", function(e) {{
+                        const target = e.target;
+                        if (!target || !target.closest) return;
+                        if (target.closest("button, a, [role='button'], input, textarea, select")) {{
+                            markInternalAction();
+                        }}
+                    }}, true);
+                    parentWindow.document.addEventListener("keydown", function(e) {{
+                        if (e.key === "Enter" || e.key === " ") markInternalAction();
+                    }}, true);
+                }}
+
                 const raw = parentWindow.localStorage.getItem(membershipKey);
                 if (!raw) return;
                 const old = JSON.parse(raw);
@@ -1107,7 +1128,7 @@ def install_refresh_cleanup_probe() -> None:
                 if (old.session_id === currentSession) return;
 
                 const lastInternal = Number(parentWindow.localStorage.getItem(internalReloadKey) || "0");
-                const internalReloadRecently = lastInternal && ((Date.now() - lastInternal) < 5000);
+                const internalReloadRecently = lastInternal && ((Date.now() - lastInternal) < 20000);
                 if (internalReloadRecently) return;
 
                 const url = new URL(parentWindow.location.href);
@@ -1881,7 +1902,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V21_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V22_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -1893,7 +1914,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V21-room-clean-kick（重新整理自動離房、防重複加入、房主可踢人）")
+    st.caption("目前版本：V22-join-no-refresh-kick（建立/加入不會被刷新踢出，仍支援房主踢人）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -1967,7 +1988,8 @@ with st.sidebar:
                     st.session_state.battle_question_no = 1
                     st.session_state.pending_new_challenge = True
                 st.session_state.battle_room_notice = msg
-                st.rerun()
+                # 不在建立房間後立刻 st.rerun()；讓本輪先把 membership 寫入瀏覽器，
+                # 避免下一輪被 refresh-cleanup 誤判為重新整理而踢出。
 
         with room_col2:
             if st.button("🚪 加入房間", use_container_width=True, disabled=not valid_player_name):
@@ -1984,7 +2006,8 @@ with st.sidebar:
                     st.session_state.battle_question_no = 1
                     st.session_state.pending_new_challenge = True
                 st.session_state.battle_room_notice = msg
-                st.rerun()
+                # 不在加入房間後立刻 st.rerun()；讓本輪先把 membership 寫入瀏覽器，
+                # 避免下一輪被 refresh-cleanup 誤判為重新整理而踢出。
 
         # 重新讀取，避免剛建立/加入後仍使用舊的 room_meta。
         room_meta_now = get_battle_room_meta(requested_room_code)
