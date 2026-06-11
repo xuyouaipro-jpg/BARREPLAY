@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V19 battle lobby: start button + named players + timer + final winner
+# Deployment version：V20 battle live sync: fullscreen chart overlay + synchronized room timer
 
 import base64
 import hashlib
@@ -33,7 +33,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V19：對戰房間新增開始按鈕、玩家必填名稱、房主賽前設定關卡數 / 每關限時，時間到可直接提交，完賽後顯示勝負差距。")
+st.caption("V20：對戰開始後自動進入K線專注模式，房間狀態/玩家列表/倒數時間自動同步，所有玩家依房間開始時間同時開局與結束。")
 st.markdown("---")
 
 # =========================================================
@@ -55,7 +55,7 @@ BATTLE_MAX_QUESTION_COUNT = 10
 BATTLE_DEFAULT_TIME_LIMIT_MINUTES = 8
 BATTLE_MIN_TIME_LIMIT_MINUTES = 1
 BATTLE_MAX_TIME_LIMIT_MINUTES = 30
-BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v19.json")
+BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v20.json")
 BATTLE_DEFAULT_POOL_TEXT = "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409"
 
 DEFAULT_SETTINGS = {
@@ -166,6 +166,64 @@ def install_browser_settings_restore() -> None:
                 }}
             }}
         }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def install_battle_live_sync(enabled: bool, seconds: float = 1.0) -> None:
+    """用瀏覽器定時重新載入 Streamlit 頁面，讓等待室、開始狀態、玩家在線與倒數時間自動同步。"""
+    if not enabled:
+        return
+    seconds = max(0.8, float(seconds))
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            const delayMs = {int(seconds * 1000)};
+            const parentWindow = window.parent;
+            const timerKey = "__barreplay_battle_live_sync_timer_v20";
+            if (parentWindow[timerKey]) {{
+                clearTimeout(parentWindow[timerKey]);
+            }}
+            parentWindow[timerKey] = setTimeout(function() {{
+                try {{
+                    const url = new URL(parentWindow.location.href);
+                    url.searchParams.set("battle_live_tick", String(Date.now()));
+                    parentWindow.location.replace(url.toString());
+                }} catch (e) {{
+                    parentWindow.location.reload();
+                }}
+            }}, delayMs);
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def install_battle_focus_mode(enabled: bool) -> None:
+    """對戰開始後把畫面壓成圖表優先的專注模式，並自動捲到 K 線圖。"""
+    if not enabled:
+        return
+    components.html(
+        """
+        <script>
+        (function(){
+            const doc = window.parent.document;
+            if (!doc.getElementById('barreplay-battle-focus-style-v20')) {
+                const style = doc.createElement('style');
+                style.id = 'barreplay-battle-focus-style-v20';
+                style.innerHTML = `
+                    header[data-testid="stHeader"]{display:none!important;}
+                    div[data-testid="stToolbar"]{display:none!important;}
+                    div.block-container{padding-top:0.25rem!important;padding-left:0.45rem!important;padding-right:0.45rem!important;max-width:100%!important;}
+                    #MainMenu, footer{display:none!important;}
+                `;
+                doc.head.appendChild(style);
+            }
+        })();
         </script>
         """,
         height=0,
@@ -410,7 +468,7 @@ def get_battle_room_meta(room_code: str) -> dict[str, Any]:
 def is_battle_room_started(room_data: dict[str, Any] | None) -> bool:
     if not isinstance(room_data, dict):
         return False
-    return str(room_data.get("status", "waiting")) == "started"
+    return str(room_data.get("status", "waiting")) in ["started", "ended"]
 
 
 def is_battle_room_waiting(room_data: dict[str, Any] | None) -> bool:
@@ -645,6 +703,7 @@ def start_battle_room(room_code: str, player_name: str) -> tuple[bool, str]:
     room_data["updated_at"] = now
     room_data["question_count"] = get_room_question_count_from_data(room_data)
     room_data["time_limit_minutes"] = get_room_time_limit_from_data(room_data)
+    room_data["sync_mode"] = "global_started_at_v20"
     save_battle_state(state)
     return True, "遊戲已開始！所有玩家從第 1 關開始。"
 
@@ -789,6 +848,84 @@ def get_question_time_status(room_code: str, player_name: str, question_no: int,
         "time_up": left <= 0,
         "time_text": f"{max(0, left)//60:02d}:{max(0, left)%60:02d}",
     }
+
+
+def get_room_start_datetime(room_data: dict[str, Any] | None) -> datetime | None:
+    if not isinstance(room_data, dict) or not room_data.get("started_at"):
+        return None
+    try:
+        dt = datetime.fromisoformat(str(room_data.get("started_at")))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def get_global_battle_time_status(room_data: dict[str, Any] | None, question_no: int | None = None) -> dict[str, Any]:
+    """依房間 started_at 計算全房同步題號與倒數時間。"""
+    question_count = get_room_question_count_from_data(room_data)
+    limit_minutes = get_room_time_limit_from_data(room_data)
+    limit_seconds = max(1, int(limit_minutes * 60))
+    started_dt = get_room_start_datetime(room_data)
+
+    if started_dt is None:
+        return {
+            "started_at": None,
+            "question_no": 1,
+            "scheduled_question_no": 1,
+            "limit_minutes": limit_minutes,
+            "left_seconds": limit_seconds,
+            "elapsed_seconds": 0,
+            "time_up": False,
+            "game_over": False,
+            "time_text": f"{limit_seconds//60:02d}:{limit_seconds%60:02d}",
+        }
+
+    now = datetime.now(timezone.utc)
+    elapsed_seconds = max(0, int((now - started_dt).total_seconds()))
+    scheduled_question_no = min(question_count, elapsed_seconds // limit_seconds + 1)
+    if question_no is None:
+        question_no = scheduled_question_no
+    question_no = int(np.clip(int(question_no), 1, question_count))
+    question_start = started_dt + timedelta(seconds=(question_no - 1) * limit_seconds)
+    question_deadline = question_start + timedelta(seconds=limit_seconds)
+    left = int((question_deadline - now).total_seconds())
+    total_duration = question_count * limit_seconds
+    game_over = elapsed_seconds >= total_duration
+    left_clamped = max(0, left)
+    return {
+        "started_at": started_dt,
+        "question_start": question_start,
+        "deadline": question_deadline,
+        "question_no": question_no,
+        "scheduled_question_no": int(scheduled_question_no),
+        "limit_minutes": limit_minutes,
+        "left_seconds": left_clamped,
+        "elapsed_seconds": elapsed_seconds,
+        "time_up": left <= 0,
+        "game_over": bool(game_over),
+        "time_text": f"{left_clamped//60:02d}:{left_clamped%60:02d}",
+    }
+
+
+def mark_battle_room_ended_if_needed(room_code: str, room_data: dict[str, Any] | None) -> None:
+    if not isinstance(room_data, dict) or not is_battle_room_started(room_data):
+        return
+    status = get_global_battle_time_status(room_data)
+    if not status.get("game_over"):
+        return
+    room = normalize_room_code(room_code)
+    state = load_battle_state()
+    saved = state.get("rooms", {}).get(room)
+    if not isinstance(saved, dict):
+        return
+    if saved.get("status") != "ended":
+        saved["status"] = "ended"
+        saved["ended_at"] = _utc_now_iso()
+        saved["updated_at"] = _utc_now_iso()
+        save_battle_state(state)
+
 
 
 def get_battle_winner_summary(room_code: str) -> dict[str, Any]:
@@ -1452,7 +1589,7 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 .action-btn{background:#263047;border-color:#44506a;}
 .trade-btn{background:#2b263a;border-color:#5c4a82;}
 #status{margin-left:8px;font-size:13px;color:#9aa4b2;white-space:nowrap;flex:0 0 auto;}
-#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}
+#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}#battleOverlay{position:absolute;left:12px;top:12px;z-index:25;display:__OVERLAY_DISPLAY__;min-width:250px;max-width:360px;background:rgba(10,14,22,.78);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.16);border-radius:10px;padding:10px 12px;color:#f1f5f9;font-size:13px;line-height:1.55;box-shadow:0 10px 28px rgba(0,0,0,.35);pointer-events:none;}#battleOverlay .big{font-size:20px;font-weight:800;}#battleOverlay .good{color:#ff6b6b;}#battleOverlay .bad{color:#26c6da;}
 #macdBox{position:relative;width:100%;height:__MACD_CHART_HEIGHT__px;display:__MACD_DISPLAY__;border-top:1px solid rgba(255,255,255,0.08);}#macdChart{position:absolute;inset:0;}
 </style>
 </head>
@@ -1461,10 +1598,10 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 <div id="toolbar">
 <button class="tool-btn active" data-tool="cursor">游標</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">⏮ -10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">⬅ 上一根</button><button class="tool-btn action-btn" data-action="下一根">➡ 下一根</button><button class="tool-btn action-btn" data-action="+10">⏭ +10</button><button class="tool-btn action-btn" data-action="下一關">🎲 下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入做多">買</button><button class="tool-btn trade-btn" data-action="賣出多單">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補空單">補</button><button class="tool-btn trade-btn" data-action="全部平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
 </div>
-<div id="chartBox"><div id="mainChart"></div><canvas id="drawCanvas"></canvas></div><div id="macdBox"><div id="macdChart"></div></div>
+<div id="chartBox"><div id="mainChart"></div><div id="battleOverlay">__OVERLAY_HTML__</div><canvas id="drawCanvas"></canvas></div><div id="macdBox"><div id="macdChart"></div></div>
 </div>
 <script>
-const candleData=__CANDLES__;const volumeData=__VOLUMES__;const indicatorPayload=__INDICATORS__;const markers=__MARKERS__;const macdPayload=__MACD__;const showMacd=__SHOW_MACD__;const drawingsKey=__DRAWINGS_KEY__;const viewKey=__VIEW_KEY__;const allowBackActions=__ALLOW_BACK_ACTIONS__;
+const candleData=__CANDLES__;const volumeData=__VOLUMES__;const indicatorPayload=__INDICATORS__;const markers=__MARKERS__;const macdPayload=__MACD__;const showMacd=__SHOW_MACD__;const drawingsKey=__DRAWINGS_KEY__;const viewKey=__VIEW_KEY__;const allowBackActions=__ALLOW_BACK_ACTIONS__;const focusMode=__FOCUS_MODE__;
 const chartBox=document.getElementById("chartBox");const canvas=document.getElementById("drawCanvas");const ctx=canvas.getContext("2d");const statusEl=document.getElementById("status");
 const timeLabelMap={};candleData.forEach(d=>{timeLabelMap[d.time]=d.label;});
 if(!allowBackActions){
@@ -1509,14 +1646,14 @@ function clickParentButtonByText(keyword){if(!allowBackActions&&isBackAction(key
 document.querySelectorAll(".action-btn[data-action], .trade-btn[data-action]").forEach(btn=>btn.addEventListener("click",()=>clickParentButtonByText(btn.dataset.action)));
 document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLowerCase();if(tag==="input"||tag==="textarea"||e.target.isContentEditable)return;if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
 window.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
-chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);drawAll();
+chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);if(focusMode){setTimeout(()=>{try{window.frameElement.scrollIntoView({behavior:"smooth",block:"start"});}catch(e){}},250);setTimeout(()=>{try{document.getElementById("wrap").requestFullscreen();}catch(e){}},600);}drawAll();
 </script>
 </body>
 </html>
 '''
 
 
-def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, show_macd, trade_log, df_all, blind_mode, ticker, interval, challenge_start_idx, challenge_id, height, allow_back_actions=True) -> None:
+def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, show_macd, trade_log, df_all, blind_mode, ticker, interval, challenge_start_idx, challenge_id, height, allow_back_actions=True, overlay_html="", focus_mode=False) -> None:
     candles = make_candle_data(visible_df, blind_mode=blind_mode, challenge_start_idx=challenge_start_idx)
     volumes = make_volume_data(visible_df) if show_volume else []
     indicators = build_indicator_payload(indicator_df, selected_indicators)
@@ -1551,9 +1688,12 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__SHOW_MACD__", json.dumps(show_macd))
         .replace("__DRAWINGS_KEY__", json.dumps(drawings_key, ensure_ascii=False))
         .replace("__VIEW_KEY__", json.dumps(view_key, ensure_ascii=False))
-        .replace("__ALLOW_BACK_ACTIONS__", json.dumps(bool(allow_back_actions))))
+        .replace("__ALLOW_BACK_ACTIONS__", json.dumps(bool(allow_back_actions)))
+        .replace("__FOCUS_MODE__", json.dumps(bool(focus_mode)))
+        .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
+        .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V16_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V20_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -1565,7 +1705,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V19-battle-start-timer（開始按鈕、玩家必填名稱、房主設定關卡數與時限、時間到可提交、完賽顯示勝負）")
+    st.caption("目前版本：V20-battle-live-sync（倒數/玩家/開始狀態自動同步，K線左上顯示時間與損益）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -1717,7 +1857,7 @@ with st.sidebar:
         else:
             st.warning("尚未加入這個房間。請先建立房間或加入房間。")
 
-        if st.button("🔄 刷新房間玩家", use_container_width=True):
+        if st.button("🔄 立即同步房間", use_container_width=True):
             if room_joined_now:
                 register_battle_presence(requested_room_code, requested_player_name, st.session_state.get("setting_interval_label", "日線"), st.session_state.get("setting_challenge_bars", 120))
             st.rerun()
@@ -1782,8 +1922,10 @@ if mode == "對戰模式":
     battle_room_started = is_battle_room_started(battle_room_meta)
     battle_question_count = get_room_question_count_from_data(battle_room_meta)
     battle_time_limit_minutes = get_room_time_limit_from_data(battle_room_meta)
+    install_battle_live_sync(True, seconds=1.0 if battle_room_started else 2.0)
 
     if not battle_room_started:
+        install_battle_live_sync(True, seconds=2.0)
         st.markdown("### 🕒 對戰等待室")
         owner_name = battle_room_meta.get("created_by", "") if isinstance(battle_room_meta, dict) else ""
         st.info(f"房間 {battle_room_code} 尚未開始，等待房主 {owner_name or '未知'} 按『開始對戰』。")
@@ -1810,7 +1952,23 @@ if mode == "對戰模式":
 
 battle_question_no = int(st.session_state.get("battle_question_no", 1))
 battle_question_no = int(np.clip(battle_question_no, 1, battle_question_count))
-st.session_state["battle_question_no"] = battle_question_no
+if mode == "對戰模式" and battle_room_started:
+    scheduled_status_pre = get_global_battle_time_status(battle_room_meta, question_no=battle_question_no)
+    scheduled_q = int(scheduled_status_pre.get("scheduled_question_no", battle_question_no))
+    submitted_scores_pre = get_player_battle_scores(battle_room_code, battle_player_name)
+    # 若房間時間已進入下一題，而且本題已提交，就自動跟著全房進入下一題。
+    if scheduled_q > battle_question_no and str(battle_question_no) in submitted_scores_pre:
+        battle_question_no = scheduled_q
+        st.session_state["battle_question_no"] = battle_question_no
+        st.session_state.pending_new_challenge = True
+    elif scheduled_q < battle_question_no:
+        battle_question_no = scheduled_q
+        st.session_state["battle_question_no"] = battle_question_no
+        st.session_state.pending_new_challenge = True
+    else:
+        st.session_state["battle_question_no"] = battle_question_no
+else:
+    st.session_state["battle_question_no"] = battle_question_no
 battle_questions = build_battle_questions(battle_room_code, interval_label, challenge_bars, battle_question_count)
 battle_question = battle_questions[battle_question_no - 1]
 
@@ -1870,9 +2028,13 @@ bars_total = int(st.session_state.challenge_end_idx - st.session_state.challenge
 bars_left = max(0, bars_total - bars_passed)
 battle_time_status = None
 battle_time_up = False
+battle_game_over = False
 if mode == "對戰模式":
-    battle_time_status = get_question_time_status(battle_room_code, battle_player_name, battle_question_no, battle_room_meta)
+    battle_time_status = get_global_battle_time_status(battle_room_meta, question_no=battle_question_no)
     battle_time_up = bool(battle_time_status["time_up"])
+    battle_game_over = bool(battle_time_status.get("game_over", False))
+    if battle_game_over:
+        mark_battle_room_ended_if_needed(battle_room_code, battle_room_meta)
 
 stock_name = "" if blind_mode else get_stock_name(actual_loaded_ticker)
 if mode == "對戰模式":
@@ -1881,6 +2043,24 @@ if mode == "對戰模式":
 else:
     show_title = "隨機盲測標的" if blind_mode else f"{actual_loaded_ticker} {stock_name}"
 show_time = f"D+{bars_passed}" if blind_mode else current_row["TimeStr"]
+
+# 對戰模式：時間到時自動提交目前題目的當下資產，確保全房可同步進入下一題或結算。
+if mode == "對戰模式":
+    submitted_scores_auto = get_player_battle_scores(battle_room_code, battle_player_name)
+    if battle_time_up and str(battle_question_no) not in submitted_scores_auto:
+        submit_battle_score(
+            room_code=battle_room_code,
+            player_name=battle_player_name,
+            question_no=battle_question_no,
+            final_equity=total_equity,
+            return_pct=return_pct,
+            ticker=actual_loaded_ticker,
+            interval_label=interval_label,
+            challenge_bars=challenge_bars,
+            trade_count=len(st.session_state.trade_log),
+        )
+        st.session_state.battle_last_submit_message = f"時間到，自動提交第 {battle_question_no} 題：{total_equity:,.0f} 元"
+        st.rerun()
 
 # =========================================================
 # 9. Top Info
@@ -1899,6 +2079,9 @@ g4.metric("目前時間", show_time)
 st.progress(min(max(bars_passed / max(bars_total, 1), 0), 1))
 
 if mode == "對戰模式":
+    install_battle_live_sync(True, seconds=1.0 if not battle_game_over else 5.0)
+    install_battle_focus_mode(True)
+    chart_height = max(chart_height, 920)
     st.markdown("### 🏆 對戰模式")
     st.warning("對戰模式已鎖定回看：不能按上一根或 -10，只能往下一根推進。")
     players_df = build_battle_room_players_df(battle_room_code)
@@ -1909,10 +2092,12 @@ if mode == "對戰模式":
     b3.metric("目前題目", f"{battle_question_no} / {battle_question_count}")
     b4.metric("本題期末金額", f"{total_equity:,.0f}")
     b5.metric("房間人數", f"{len(players_df)} 人", delta=f"在線 {online_count}")
-    b6.metric("倒數時間", str(battle_time_status["time_text"]) if battle_time_status else "--")
+    b6.metric("倒數時間", "結束" if battle_game_over else (str(battle_time_status["time_text"]) if battle_time_status else "--"))
 
-    if battle_time_up:
-        st.error("⏰ 本題時間到！系統已鎖定下一根與交易操作，請提交當下成績。")
+    if battle_game_over:
+        st.success("🏁 本房所有關卡時間已結束，系統進入最終結算。")
+    elif battle_time_up:
+        st.error("⏰ 本題時間到！系統會自動提交當下成績，並等待下一題同步開始。")
     else:
         st.info(f"本題限時 {battle_time_limit_minutes} 分鐘，剩餘 {battle_time_status['time_text']}。")
 
@@ -1979,8 +2164,8 @@ battle_submitted_scores = get_player_battle_scores(battle_room_code, battle_play
 battle_current_question_submitted = str(battle_question_no) in battle_submitted_scores if mode == "對戰模式" else False
 battle_player_completed_all = len(battle_submitted_scores) >= battle_question_count if mode == "對戰模式" else False
 allow_back_actions = mode != "對戰模式"
-allow_forward_actions = not (mode == "對戰模式" and (battle_time_up or battle_player_completed_all))
-trade_actions_disabled = mode == "對戰模式" and (battle_time_up or battle_player_completed_all)
+allow_forward_actions = not (mode == "對戰模式" and (battle_time_up or battle_current_question_submitted or battle_player_completed_all or battle_game_over))
+trade_actions_disabled = mode == "對戰模式" and (battle_time_up or battle_current_question_submitted or battle_player_completed_all or battle_game_over)
 
 # =========================================================
 # 10. Replay Control
@@ -2018,7 +2203,7 @@ with replay_col5:
         st.rerun()
 
 with replay_col6:
-    if st.button("🎲 下一關", use_container_width=True, disabled=(mode == "對戰模式" and (not battle_current_question_submitted or battle_question_no >= battle_question_count))):
+    if st.button("🎲 下一關", use_container_width=True, disabled=(mode == "對戰模式")):
         if mode == "對戰模式":
             next_question_no = min(battle_question_count, int(st.session_state.battle_question_no) + 1)
             st.session_state.battle_question_no = next_question_no
@@ -2112,6 +2297,19 @@ visible_end = st.session_state.challenge_end_idx if st.session_state.show_answer
 visible_df = df.iloc[visible_start: visible_end + 1]
 challenge_id = f"{st.session_state.challenge_start_idx}_{st.session_state.challenge_end_idx}"
 
+battle_overlay_html = ""
+chart_focus_mode = mode == "對戰模式" and battle_room_started
+if chart_focus_mode:
+    pnl_class = "good" if return_pct >= 0 else "bad"
+    timer_text = "結束" if battle_game_over else (battle_time_status.get("time_text", "--") if battle_time_status else "--")
+    battle_overlay_html = (
+        f"<div>房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題</div>"
+        f"<div>剩餘時間</div><div class='big'>{timer_text}</div>"
+        f"<div>目前總資產：{total_equity:,.0f} 元</div>"
+        f"<div>目前損益：<span class='{pnl_class}'>{total_equity - initial_cash:,.0f} 元（{return_pct:.2f}%）</span></div>"
+        f"<div>持倉：{get_position_label()}</div>"
+    )
+
 render_tv_chart(
     visible_df=visible_df,
     indicator_df=visible_df,
@@ -2127,6 +2325,8 @@ render_tv_chart(
     challenge_id=challenge_id,
     height=chart_height,
     allow_back_actions=allow_back_actions,
+    overlay_html=battle_overlay_html,
+    focus_mode=chart_focus_mode,
 )
 
 if selected_indicators:
@@ -2147,7 +2347,7 @@ show_stage_result = st.session_state.current_idx >= st.session_state.challenge_e
 if show_stage_result:
     st.markdown("### 🏁 闖關結果")
     if mode == "對戰模式" and battle_time_up and st.session_state.current_idx < st.session_state.challenge_end_idx:
-        st.error(f"⏰ 本題時間到！系統以目前總資產 {total_equity:,.0f} 元作為本題成績。")
+        st.error(f"⏰ 本題時間到！系統已用目前總資產 {total_equity:,.0f} 元自動提交本題成績。")
     elif return_pct >= target_return_pct:
         st.success(f"過關！目標 {target_return_pct:.2f}%，你的報酬率 {return_pct:.2f}%。")
     else:
@@ -2160,7 +2360,7 @@ if show_stage_result:
         submitted_scores = get_player_battle_scores(battle_room_code, battle_player_name)
         already_submitted = str(battle_question_no) in submitted_scores
         if already_submitted:
-            st.info("你已提交過本題成績；再次提交會覆蓋本題分數。")
+            st.info("你已提交本題成績；本題操作已鎖定，系統會依房間時間自動進入下一題。")
 
         c_submit, c_next = st.columns([1, 1])
         can_submit_battle = battle_room_joined
@@ -2183,7 +2383,7 @@ if show_stage_result:
                 st.session_state.battle_last_submit_message = f"已提交第 {battle_question_no} 題：{total_equity:,.0f} 元"
                 st.rerun()
         with c_next:
-            if st.button("➡️ 前往下一題", use_container_width=True, disabled=((not already_submitted) or battle_question_no >= battle_question_count)):
+            if st.button("➡️ 等待下一題自動開始", use_container_width=True, disabled=True):
                 next_question_no = min(battle_question_count, battle_question_no + 1)
                 st.session_state.battle_question_no = next_question_no
                 reset_question_timer(battle_room_code, battle_player_name, next_question_no)
