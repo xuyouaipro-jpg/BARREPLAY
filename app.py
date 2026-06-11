@@ -1176,7 +1176,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V16-battle-no-back（對戰模式禁止上一根 / -10，只能往前作答）")
+    st.caption("目前版本：V17-battle-question-fix（對戰模式禁止上一根 / -10，只能往前作答）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -1188,12 +1188,19 @@ with st.sidebar:
         st.subheader("🏁 對戰房間")
         st.text_input("房間號碼", key="battle_room_code", help="同一個房間號碼會產生同樣 5 題。")
         st.text_input("玩家名稱", key="battle_player_name")
-        st.selectbox(
+        # 不使用 key="battle_question_no"，避免 Streamlit 禁止在 widget 建立後修改同名 session_state。
+        # 內部題號存在 st.session_state.battle_question_no，按「下一題」或工具列換題時才不會報錯。
+        current_question_index = int(np.clip(int(st.session_state.get("battle_question_no", 1)), 1, BATTLE_QUESTION_COUNT)) - 1
+        picked_battle_question_no = st.selectbox(
             "目前題目",
             list(range(1, BATTLE_QUESTION_COUNT + 1)),
-            key="battle_question_no",
+            index=current_question_index,
             format_func=lambda x: f"第 {x} / {BATTLE_QUESTION_COUNT} 題",
         )
+        if int(picked_battle_question_no) != int(st.session_state.get("battle_question_no", 1)):
+            st.session_state.battle_question_no = int(picked_battle_question_no)
+            st.session_state.pending_new_challenge = True
+            st.rerun()
         st.caption("對戰模式使用固定預設股票池，確保只靠房間號碼就能讓所有玩家拿到同樣題目。")
     else:
         if st.button("🎲 隨機開新關卡", use_container_width=True):
@@ -1232,7 +1239,7 @@ battle_room_code = normalize_room_code(st.session_state.get("battle_room_code", 
 battle_player_name = normalize_player_name(st.session_state.get("battle_player_name", "Player"))
 battle_question_no = int(st.session_state.get("battle_question_no", 1))
 battle_question_no = int(np.clip(battle_question_no, 1, BATTLE_QUESTION_COUNT))
-st.session_state.battle_question_no = battle_question_no
+st.session_state["battle_question_no"] = battle_question_no
 battle_questions = build_battle_questions(battle_room_code, interval_label, challenge_bars)
 battle_question = battle_questions[battle_question_no - 1]
 
