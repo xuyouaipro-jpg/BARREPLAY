@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V25 rematch + winner banner + no auto fullscreen
+# Deployment version：V26 result modal + synced chart account overlay
 
 import base64
 import hashlib
@@ -10,6 +10,7 @@ import random
 import tempfile
 import uuid
 from datetime import datetime, timezone, timedelta
+from html import escape
 from typing import Any
 
 import numpy as np
@@ -38,7 +39,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V25：新增再來一局、結束大字宣布勝者與獲利；取消圖表自動全螢幕。")
+st.caption("V26：成績 / 獲勝改成彈窗式宣告；K 線左上角同步顯示可用現金、總資產、損益與持倉。")
 st.markdown("---")
 
 # =========================================================
@@ -984,6 +985,7 @@ def get_battle_winner_summary(room_code: str) -> dict[str, Any]:
         "winner": winner,
         "winner_amount": winner_amount,
         "winner_profit": winner_profit,
+        "base_amount": base_amount,
         "second": second,
         "margin": margin,
         "message": message,
@@ -1026,6 +1028,100 @@ def render_battle_winner_banner(winner_info: dict[str, Any], room_code: str, rou
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_battle_result_modal(winner_info: dict[str, Any], leaderboard_df: pd.DataFrame, room_code: str, round_no: int) -> None:
+    """固定在畫面中央的成績 / 獲勝彈窗。用 CSS fixed，避免依賴 st.dialog 版本。"""
+    if not winner_info.get("has_winner"):
+        return
+
+    winner = escape(str(winner_info.get("winner", "")))
+    profit = float(winner_info.get("winner_profit", 0.0))
+    amount = float(winner_info.get("winner_amount", 0.0))
+    margin = float(winner_info.get("margin", 0.0))
+    second = escape(str(winner_info.get("second", "")))
+    base_amount = float(winner_info.get("base_amount", 0.0))
+    profit_class = "profit-up" if profit >= 0 else "profit-down"
+
+    rows_html = ""
+    if isinstance(leaderboard_df, pd.DataFrame) and not leaderboard_df.empty:
+        for _, row in leaderboard_df.head(6).iterrows():
+            rank = escape(str(row.get("排名", "")))
+            player = escape(str(row.get("玩家", "")))
+            completed = escape(str(row.get("完成題數", "")))
+            total_raw = row.get("總金額", np.nan)
+            try:
+                total = float(total_raw)
+            except Exception:
+                total = float("nan")
+            if np.isfinite(total):
+                total_text = f"{total:,.0f}"
+                p_text = f"{total - base_amount:+,.0f}"
+                p_class = "profit-up" if total - base_amount >= 0 else "profit-down"
+            else:
+                total_text = "未完成"
+                p_text = "—"
+                p_class = ""
+            rows_html += (
+                f"<tr><td>{rank}</td><td>{player}</td><td>{completed}</td>"
+                f"<td>{total_text}</td><td class='{p_class}'>{p_text}</td></tr>"
+            )
+
+    margin_text = f"贏第二名 {second} {margin:,.0f} 元" if second else "目前只有一位完成者"
+    modal_html = f"""
+    <div class="battle-result-modal">
+        <div class="battle-result-card">
+            <div class="modal-kicker">房間 {escape(str(room_code))}｜第 {round_no} 局最終成績</div>
+            <div class="modal-title">🏆 {winner} 獲勝！</div>
+            <div class="modal-profit {profit_class}">獲利 {profit:+,.0f} 元</div>
+            <div class="modal-sub">總金額 {amount:,.0f} 元｜{margin_text}</div>
+            <div class="modal-table-title">📊 房間成績排行</div>
+            <table class="modal-table">
+                <thead><tr><th>排名</th><th>玩家</th><th>完成題數</th><th>總金額</th><th>總獲利</th></tr></thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+            <div class="modal-note">房主可在下方按「再來一局」。</div>
+        </div>
+    </div>
+    <style>
+    .battle-result-modal {{
+        position: fixed;
+        inset: 0;
+        z-index: 999999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(2, 6, 23, 0.56);
+        backdrop-filter: blur(3px);
+        pointer-events: none;
+    }}
+    .battle-result-card {{
+        width: min(900px, 92vw);
+        max-height: 86vh;
+        overflow: auto;
+        padding: 2.0rem 2.2rem;
+        border-radius: 26px;
+        text-align: center;
+        background: radial-gradient(circle at top left, rgba(255, 214, 102, 0.42), rgba(38, 54, 87, 0.96) 44%, rgba(8, 13, 24, 0.98));
+        border: 2px solid rgba(255, 214, 102, 0.78);
+        box-shadow: 0 0 70px rgba(255, 214, 102, 0.28), 0 22px 70px rgba(0,0,0,.5);
+        color: #f8fafc;
+    }}
+    .modal-kicker {{font-size: 1.05rem; color: #dbe4ff; margin-bottom: .35rem;}}
+    .modal-title {{font-size: clamp(2.6rem, 7vw, 5.4rem); font-weight: 950; line-height: 1.03; color: #fff3bf; text-shadow: 0 0 26px rgba(255,214,102,.35);}}
+    .modal-profit {{font-size: clamp(2.0rem, 5vw, 3.7rem); font-weight: 950; margin-top: .5rem;}}
+    .profit-up {{color:#69ff94;}}
+    .profit-down {{color:#ff7b7b;}}
+    .modal-sub {{font-size: 1.25rem; margin-top: .3rem; color: #f1f5f9;}}
+    .modal-table-title {{font-size: 1.05rem; font-weight: 800; text-align:left; margin-top: 1.35rem; margin-bottom: .45rem;}}
+    .modal-table {{width:100%; border-collapse: collapse; background: rgba(15, 23, 42, .42); border-radius: 12px; overflow:hidden;}}
+    .modal-table th, .modal-table td {{padding: .55rem .65rem; border-bottom: 1px solid rgba(255,255,255,.12); text-align: center;}}
+    .modal-table th {{color:#cbd5e1; background: rgba(15,23,42,.58);}}
+    .modal-note {{margin-top:.75rem; color:#cbd5e1; font-size:.95rem;}}
+    </style>
+    """
+    st.markdown(modal_html, unsafe_allow_html=True)
 
 
 def remove_battle_player(room_code: str, player_name: str, session_id: str | None = None, reason: str = "refresh") -> tuple[bool, str]:
@@ -1876,7 +1972,7 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 .action-btn{background:#263047;border-color:#44506a;}
 .trade-btn{background:#2b263a;border-color:#5c4a82;}
 #status{margin-left:8px;font-size:13px;color:#9aa4b2;white-space:nowrap;flex:0 0 auto;}
-#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}#battleOverlay{position:absolute;left:12px;top:12px;z-index:25;display:__OVERLAY_DISPLAY__;min-width:250px;max-width:360px;background:rgba(10,14,22,.78);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.16);border-radius:10px;padding:10px 12px;color:#f1f5f9;font-size:13px;line-height:1.55;box-shadow:0 10px 28px rgba(0,0,0,.35);pointer-events:none;}#battleOverlay .big{font-size:20px;font-weight:800;}#battleOverlay .good{color:#ff6b6b;}#battleOverlay .bad{color:#26c6da;}
+#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}#battleOverlay{position:absolute;left:12px;top:12px;z-index:25;display:__OVERLAY_DISPLAY__;min-width:285px;max-width:410px;background:rgba(10,14,22,.82);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:11px 13px;color:#f1f5f9;font-size:13px;line-height:1.56;box-shadow:0 10px 28px rgba(0,0,0,.35);pointer-events:none;}#battleOverlay .big{font-size:22px;font-weight:900;}#battleOverlay .muted{color:#cbd5e1;}#battleOverlay .good{color:#ff6b6b;}#battleOverlay .bad{color:#26c6da;}#battleOverlay .money{font-weight:800;}
 #macdBox{position:relative;width:100%;height:__MACD_CHART_HEIGHT__px;display:__MACD_DISPLAY__;border-top:1px solid rgba(255,255,255,0.08);}#macdChart{position:absolute;inset:0;}
 </style>
 </head>
@@ -1952,7 +2048,8 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
     indicator_signature = "-".join(selected_indicators) if selected_indicators else "none"
     drawings_key = f"tv_drawings_{ticker}_{interval}_{challenge_id}"
     view_key = f"tv_view_{ticker}_{interval}_{challenge_id}"
-    chart_signature = f"{ticker}_{interval}_{challenge_id}_{indicator_signature}_{show_macd}_{show_volume}_{len(visible_df)}_{float(visible_df.iloc[-1]['Close']) if len(visible_df) else 0}"
+    overlay_signature = hashlib.md5(str(overlay_html).encode("utf-8")).hexdigest()[:10] if overlay_html else "no_overlay"
+    chart_signature = f"{ticker}_{interval}_{challenge_id}_{indicator_signature}_{show_macd}_{show_volume}_{overlay_signature}_{len(visible_df)}_{float(visible_df.iloc[-1]['Close']) if len(visible_df) else 0}"
 
     inner_height = max(300, height - 76)
     if show_macd:
@@ -1994,7 +2091,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V25-rematch-winner-banner（新增再來一局 / 大字勝者公告 / 取消自動全螢幕）")
+    st.caption("目前版本：V26-result-modal-overlay-sync（成績彈窗 / 獲勝彈窗 / K 線左上角帳戶同步）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2475,9 +2572,12 @@ if mode == "對戰模式":
     winner_info = get_battle_winner_summary(battle_room_code)
     if winner_info.get("has_winner"):
         if battle_game_over or winner_info.get("all_finished"):
-            render_battle_winner_banner(winner_info, battle_room_code, battle_round_no)
+            render_battle_result_modal(winner_info, leaderboard_df, battle_room_code, battle_round_no)
             st.success("🎉 對戰結束！" + winner_info.get("message", ""))
-            st.balloons()
+            balloon_key = f"battle_winner_balloons_{battle_room_code}_{battle_round_no}"
+            if not st.session_state.get(balloon_key, False):
+                st.balloons()
+                st.session_state[balloon_key] = True
             if st.session_state.get("battle_room_owner", False):
                 if st.button("🔁 再來一局", type="primary", use_container_width=True, key="battle_rematch_main_top"):
                     ok, msg = reset_battle_room_for_rematch(battle_room_code, battle_player_name)
@@ -2663,12 +2763,20 @@ if chart_focus_mode:
             deadline_ms = int(battle_time_status["deadline"].timestamp() * 1000)
     except Exception:
         deadline_ms = 0
+    account_profit = total_equity - initial_cash
+    cash_now = float(st.session_state.get("cash", 0.0))
+    realized_now = float(st.session_state.get("realized_pnl", 0.0))
+    avg_cost_now = float(st.session_state.get("avg_cost", 0.0))
+    collateral_now = float(get_short_collateral())
     battle_overlay_html = (
-        f"<div>房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題｜第 {battle_round_no} 局</div>"
-        f"<div>剩餘時間</div><div class='big'><span id='battleTimerText' data-deadline-ms='{deadline_ms}'>{timer_text}</span></div>"
-        f"<div>目前總資產：{total_equity:,.0f} 元</div>"
-        f"<div>目前損益：<span class='{pnl_class}'>{total_equity - initial_cash:,.0f} 元（{return_pct:.2f}%）</span></div>"
-        f"<div>持倉：{get_position_label()}</div>"
+        f"<div class='muted'>房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題｜第 {battle_round_no} 局</div>"
+        f"<div class='muted'>剩餘時間</div><div class='big'><span id='battleTimerText' data-deadline-ms='{deadline_ms}'>{timer_text}</span></div>"
+        f"<div>可用現金：<span class='money'>{cash_now:,.0f}</span> 元</div>"
+        f"<div>總資產：<span class='money'>{total_equity:,.0f}</span> 元</div>"
+        f"<div>目前損益：<span class='{pnl_class}'>{account_profit:+,.0f} 元（{return_pct:.2f}%）</span></div>"
+        f"<div>持倉：{get_position_label()}｜均價 {avg_cost_now:.2f}</div>"
+        f"<div>未實現：{unrealized_pnl:+,.0f}｜已實現：{realized_now:+,.0f}</div>"
+        f"<div>融券擔保：{collateral_now:,.0f} 元</div>"
     )
 
 render_tv_chart(
