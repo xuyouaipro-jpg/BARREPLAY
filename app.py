@@ -19,6 +19,11 @@ import streamlit.components.v1 as components
 import yfinance as yf
 
 try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
+
+try:
     yf.set_tz_cache_location("/tmp/yfinance_tz_cache")
 except Exception:
     pass
@@ -33,7 +38,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V23：對戰房間改用 URL/session restore，避免 live sync 或重新整理後跳出房間；保留房主踢人。")
+st.caption("V24：對戰同步改成 soft rerun，不再用 location.replace 整頁刷新；倒數改由前端即時更新。")
 st.markdown("---")
 
 # =========================================================
@@ -57,7 +62,8 @@ BATTLE_MIN_TIME_LIMIT_MINUTES = 1
 BATTLE_MAX_TIME_LIMIT_MINUTES = 30
 BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v23.json")
 BATTLE_MEMBERSHIP_KEY = "barreplay_battle_membership_v23"
-BATTLE_INTERNAL_RELOAD_KEY = "barreplay_internal_reload_v23"
+BATTLE_INTERNAL_RELOAD_KEY = "barreplay_internal_reload_v24"
+_BATTLE_LIVE_SYNC_INSTALLED_THIS_RUN = False
 BATTLE_DEFAULT_POOL_TEXT = "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409"
 
 DEFAULT_SETTINGS = {
@@ -142,68 +148,47 @@ def _normalize_loaded_settings(loaded: dict[str, Any]) -> dict[str, Any]:
 
 
 def install_browser_settings_restore() -> None:
-    """若本頁第一次開啟且 localStorage 有設定，將設定帶回 Streamlit query params 後重新整理。"""
-    components.html(
-        f"""
-        <script>
-        (function() {{
-            const key = {json.dumps(SETTINGS_KEY)};
-            const parentWindow = window.parent;
-            const params = new URLSearchParams(parentWindow.location.search);
-            const hasSettings = params.has("br_settings");
-            const stored = parentWindow.localStorage.getItem(key);
+    """V24：停用 localStorage -> query string 的整頁跳轉還原。
 
-            if (stored && !hasSettings) {{
-                try {{
-                    const encoded = btoa(unescape(encodeURIComponent(stored)))
-                        .replace(/\+/g, "-")
-                        .replace(/\//g, "_")
-                        .replace(/=+$/g, "");
-                    params.set("br_settings", encoded);
-                    params.set("br_settings_loaded", "1");
-                    const newUrl = parentWindow.location.pathname + "?" + params.toString() + parentWindow.location.hash;
-                    parentWindow.location.replace(newUrl);
-                }} catch (e) {{
-                    console.log("Failed to restore BARREPLAY settings:", e);
-                }}
-            }}
-        }})();
-        </script>
-        """,
-        height=0,
-    )
+    舊版為了把瀏覽器 localStorage 設定帶回 Python，會使用 location.replace()。
+    這在對戰 live sync 場景容易造成看起來一直重新整理。
+    因此 V24 改為不做任何整頁跳轉；當前使用者設定仍保存在 st.session_state，
+    並由 persist_settings_to_browser() 寫到 localStorage 給前端保存。
+    """
+    return
 
 
 def install_battle_live_sync(enabled: bool, seconds: float = 1.0) -> None:
-    """用瀏覽器定時重新載入 Streamlit 頁面，讓等待室、開始狀態、玩家在線與倒數時間自動同步。"""
+    """對戰同步：只做 Streamlit soft rerun，不再用 location.replace / reload 整頁重整。
+
+    舊版使用 parentWindow.location.replace() 每 1 秒改 URL，會造成瀏覽器一直重整、圖表閃爍、
+    使用者看起來像被踢出或重複加入。V24 改用 streamlit-autorefresh 觸發 app rerun，
+    不改 URL、不整頁刷新。
+    """
+    global _BATTLE_LIVE_SYNC_INSTALLED_THIS_RUN
+
     if not enabled:
         return
-    seconds = max(0.8, float(seconds))
-    components.html(
-        f"""
-        <script>
-        (function() {{
-            const delayMs = {int(seconds * 1000)};
-            const parentWindow = window.parent;
-            const timerKey = "__barreplay_battle_live_sync_timer_v23";
-            if (parentWindow[timerKey]) {{
-                clearTimeout(parentWindow[timerKey]);
-            }}
-            parentWindow[timerKey] = setTimeout(function() {{
-                try {{
-                    const url = new URL(parentWindow.location.href);
-                    try {{ parentWindow.localStorage.setItem("barreplay_internal_reload_v23", String(Date.now())); }} catch (e) {{}}
-                    url.searchParams.set("battle_live_tick", String(Date.now()));
-                    parentWindow.location.replace(url.toString());
-                }} catch (e) {{
-                    parentWindow.location.reload();
-                }}
-            }}, delayMs);
-        }})();
-        </script>
-        """,
-        height=0,
-    )
+    if _BATTLE_LIVE_SYNC_INSTALLED_THIS_RUN:
+        return
+    _BATTLE_LIVE_SYNC_INSTALLED_THIS_RUN = True
+
+    # 不再 1 秒整頁刷新。等待室需要較快同步玩家/開始狀態；遊戲中倒數交給前端 JS 即時更新，
+    # 只要低頻同步房間狀態和時間到自動提交即可。
+    raw_seconds = float(seconds)
+    if raw_seconds <= 1.2:
+        safe_seconds = 8.0      # 遊戲中：低頻同步，避免 K 線圖一直重畫
+    elif raw_seconds <= 2.2:
+        safe_seconds = 3.0      # 等待室：稍快同步玩家加入/房主開始
+    else:
+        safe_seconds = max(5.0, raw_seconds)
+
+    interval_ms = int(max(3000, safe_seconds * 1000))
+
+    if st_autorefresh is not None:
+        st_autorefresh(interval=interval_ms, key="battle_soft_sync_v24")
+    else:
+        st.info("即時同步需要 streamlit-autorefresh。請把 streamlit-autorefresh 加到 requirements.txt 後重新部署；目前已停用整頁自動刷新，避免頁面一直跳動。")
 
 
 def install_battle_focus_mode(enabled: bool) -> None:
@@ -1857,6 +1842,8 @@ function clickParentButtonByText(keyword){if(!allowBackActions&&isBackAction(key
 document.querySelectorAll(".action-btn[data-action], .trade-btn[data-action]").forEach(btn=>btn.addEventListener("click",()=>clickParentButtonByText(btn.dataset.action)));
 document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLowerCase();if(tag==="input"||tag==="textarea"||e.target.isContentEditable)return;if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
 window.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
+function updateBattleTimerText(){const el=document.getElementById("battleTimerText");if(!el)return;const deadline=Number(el.dataset.deadlineMs||"0");if(!deadline)return;const left=Math.max(0,Math.floor((deadline-Date.now())/1000));const m=String(Math.floor(left/60)).padStart(2,"0");const s=String(left%60).padStart(2,"0");el.textContent=(left<=0)?"00:00":`${m}:${s}`;if(left<=10){el.style.color="#ff5252";}}
+setInterval(updateBattleTimerText,1000);updateBattleTimerText();
 chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);if(focusMode){setTimeout(()=>{try{window.frameElement.scrollIntoView({behavior:"smooth",block:"start"});}catch(e){}},250);setTimeout(()=>{try{document.getElementById("wrap").requestFullscreen();}catch(e){}},600);}drawAll();
 </script>
 </body>
@@ -1916,7 +1903,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V23-room-stable-restore（對戰同步不會跳出房間，支援房主踢人）")
+    st.caption("目前版本：V24-no-page-reload-sync（對戰同步不會跳出房間，支援房主踢人）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2555,9 +2542,15 @@ chart_focus_mode = mode == "對戰模式" and battle_room_started
 if chart_focus_mode:
     pnl_class = "good" if return_pct >= 0 else "bad"
     timer_text = "結束" if battle_game_over else (battle_time_status.get("time_text", "--") if battle_time_status else "--")
+    deadline_ms = 0
+    try:
+        if battle_time_status and battle_time_status.get("deadline"):
+            deadline_ms = int(battle_time_status["deadline"].timestamp() * 1000)
+    except Exception:
+        deadline_ms = 0
     battle_overlay_html = (
         f"<div>房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題</div>"
-        f"<div>剩餘時間</div><div class='big'>{timer_text}</div>"
+        f"<div>剩餘時間</div><div class='big'><span id='battleTimerText' data-deadline-ms='{deadline_ms}'>{timer_text}</span></div>"
         f"<div>目前總資產：{total_equity:,.0f} 元</div>"
         f"<div>目前損益：<span class='{pnl_class}'>{total_equity - initial_cash:,.0f} 元（{return_pct:.2f}%）</span></div>"
         f"<div>持倉：{get_position_label()}</div>"
