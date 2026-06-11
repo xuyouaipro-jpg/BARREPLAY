@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V16 battle no-back: battle mode disables previous K controls
+# Deployment version：V18 battle rooms: create/join rooms + player presence
 
 import base64
 import hashlib
@@ -8,6 +8,7 @@ import json
 import os
 import random
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -32,7 +33,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V16：對戰模式禁止使用上一根 / -10 回看，只能往前作答；保留 5 題房間對戰、台股融券限制與圖表視角記憶。")
+st.caption("V18：新增對戰房間建立 / 加入與房間玩家列表；對戰模式仍禁止上一根 / -10 回看。")
 st.markdown("---")
 
 # =========================================================
@@ -49,7 +50,7 @@ TW_SAFE_MAINTENANCE_RATE = 1.66
 
 # 對戰模式參數：同一房間號碼會產生相同 5 題。
 BATTLE_QUESTION_COUNT = 5
-BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v15.json")
+BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v18.json")
 BATTLE_DEFAULT_POOL_TEXT = "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409"
 
 DEFAULT_SETTINGS = {
@@ -190,6 +191,11 @@ def init_session_state() -> None:
         "battle_player_name": "Player",
         "battle_question_no": 1,
         "battle_last_submit_message": "",
+        "battle_room_joined": False,
+        "battle_joined_room_code": "",
+        "battle_room_owner": False,
+        "battle_room_notice": "",
+        "battle_session_id": str(uuid.uuid4()),
     }
 
     for key, value in core_defaults.items():
@@ -374,8 +380,10 @@ def submit_battle_score(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "question_count": BATTLE_QUESTION_COUNT,
             "players": {},
+            "active_players": {},
         },
     )
+    room_data.setdefault("active_players", {})
     room_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     room_data["interval_label"] = interval_label
     room_data["challenge_bars"] = int(challenge_bars)
@@ -388,7 +396,14 @@ def submit_battle_score(
             "joined_at": datetime.now(timezone.utc).isoformat(),
         },
     )
-    player_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    now_submit = datetime.now(timezone.utc).isoformat()
+    room_data.setdefault("active_players", {})[player] = {
+        "player_name": player,
+        "session_id": str(st.session_state.get("battle_session_id", "")),
+        "last_seen": now_submit,
+    }
+    player_data["updated_at"] = now_submit
+    player_data["last_seen"] = now_submit
     player_data.setdefault("scores", {})[q_key] = {
         "question_no": int(question_no),
         "ticker": str(ticker),
@@ -442,6 +457,152 @@ def get_player_battle_scores(room_code: str, player_name: str) -> dict[str, Any]
     room = normalize_room_code(room_code)
     player = normalize_player_name(player_name)
     return state.get("rooms", {}).get(room, {}).get("players", {}).get(player, {}).get("scores", {})
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _format_iso_localish(iso_text: str) -> str:
+    if not iso_text:
+        return ""
+    return str(iso_text).replace("T", " ")[:19]
+
+
+def create_battle_room(room_code: str, player_name: str, interval_label: str, challenge_bars: int) -> tuple[bool, str]:
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    now = _utc_now_iso()
+    state = load_battle_state()
+    rooms = state.setdefault("rooms", {})
+
+    if room in rooms:
+        return False, f"房間 {room} 已存在，請改按『加入房間』。"
+
+    rooms[room] = {
+        "room_code": room,
+        "created_by": player,
+        "created_at": now,
+        "updated_at": now,
+        "interval_label": interval_label,
+        "challenge_bars": int(challenge_bars),
+        "question_count": BATTLE_QUESTION_COUNT,
+        "players": {},
+        "active_players": {},
+    }
+    save_battle_state(state)
+    register_battle_presence(room, player, interval_label, challenge_bars)
+    return True, f"已建立並加入房間 {room}。"
+
+
+def join_battle_room(room_code: str, player_name: str, interval_label: str, challenge_bars: int) -> tuple[bool, str]:
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    state = load_battle_state()
+    rooms = state.setdefault("rooms", {})
+
+    if room not in rooms:
+        return False, f"找不到房間 {room}，請確認房號或先建立房間。"
+
+    register_battle_presence(room, player, interval_label, challenge_bars)
+    return True, f"已加入房間 {room}。"
+
+
+def register_battle_presence(room_code: str, player_name: str, interval_label: str, challenge_bars: int) -> None:
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    now = _utc_now_iso()
+    session_id = str(st.session_state.get("battle_session_id", "")) or str(uuid.uuid4())
+    st.session_state.battle_session_id = session_id
+
+    state = load_battle_state()
+    rooms = state.setdefault("rooms", {})
+    room_data = rooms.setdefault(
+        room,
+        {
+            "room_code": room,
+            "created_by": player,
+            "created_at": now,
+            "question_count": BATTLE_QUESTION_COUNT,
+            "players": {},
+            "active_players": {},
+        },
+    )
+    room_data["updated_at"] = now
+    room_data["interval_label"] = interval_label
+    room_data["challenge_bars"] = int(challenge_bars)
+    room_data.setdefault("active_players", {})[player] = {
+        "player_name": player,
+        "session_id": session_id,
+        "last_seen": now,
+    }
+    player_data = room_data.setdefault("players", {}).setdefault(
+        player,
+        {
+            "player_name": player,
+            "scores": {},
+            "joined_at": now,
+        },
+    )
+    player_data["last_seen"] = now
+    player_data.setdefault("scores", {})
+    save_battle_state(state)
+
+
+def is_player_joined_room(room_code: str, player_name: str) -> bool:
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    return (
+        bool(st.session_state.get("battle_room_joined", False))
+        and st.session_state.get("battle_joined_room_code", "") == room
+        and normalize_player_name(st.session_state.get("battle_player_name", player)) == player
+    )
+
+
+def get_battle_room_meta(room_code: str) -> dict[str, Any]:
+    room = normalize_room_code(room_code)
+    state = load_battle_state()
+    data = state.get("rooms", {}).get(room, {})
+    return data if isinstance(data, dict) else {}
+
+
+def build_battle_room_players_df(room_code: str) -> pd.DataFrame:
+    room_data = get_battle_room_meta(room_code)
+    players = room_data.get("players", {}) if isinstance(room_data, dict) else {}
+    active_players = room_data.get("active_players", {}) if isinstance(room_data, dict) else {}
+    owner = room_data.get("created_by", "")
+    now_ts = datetime.now(timezone.utc).timestamp()
+    rows = []
+
+    for player, pdata in players.items():
+        if not isinstance(pdata, dict):
+            continue
+        active_data = active_players.get(player, {}) if isinstance(active_players, dict) else {}
+        last_seen = str(active_data.get("last_seen") or pdata.get("last_seen") or pdata.get("updated_at") or pdata.get("joined_at") or "")
+        online = False
+        try:
+            online = (now_ts - datetime.fromisoformat(last_seen).timestamp()) <= 180
+        except Exception:
+            online = False
+        scores = pdata.get("scores", {}) if isinstance(pdata.get("scores", {}), dict) else {}
+        rows.append(
+            {
+                "狀態": "在線" if online else "離線",
+                "玩家": player,
+                "角色": "房主" if player == owner else "玩家",
+                "完成題數": len(scores),
+                "加入時間": _format_iso_localish(str(pdata.get("joined_at", ""))),
+                "最後在線": _format_iso_localish(last_seen),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(columns=["狀態", "玩家", "角色", "完成題數", "加入時間", "最後在線"])
+
+    df_players = pd.DataFrame(rows)
+    df_players["_online_sort"] = df_players["狀態"].map({"在線": 0, "離線": 1}).fillna(2)
+    df_players["_role_sort"] = df_players["角色"].map({"房主": 0, "玩家": 1}).fillna(2)
+    return df_players.sort_values(["_online_sort", "_role_sort", "玩家"]).drop(columns=["_online_sort", "_role_sort"]).reset_index(drop=True)
 
 
 init_session_state()
@@ -1176,7 +1337,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V17-battle-question-fix（對戰模式禁止上一根 / -10，只能往前作答）")
+    st.caption("目前版本：V18-battle-room-lobby（可建立 / 加入房間，並顯示房間玩家）")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -1186,10 +1347,53 @@ with st.sidebar:
     if mode == "對戰模式":
         st.markdown("---")
         st.subheader("🏁 對戰房間")
-        st.text_input("房間號碼", key="battle_room_code", help="同一個房間號碼會產生同樣 5 題。")
+        st.text_input("房間號碼", key="battle_room_code", help="先輸入房號，再按建立或加入。同一個房間號碼會產生同樣 5 題。")
         st.text_input("玩家名稱", key="battle_player_name")
+
+        requested_room_code = normalize_room_code(st.session_state.get("battle_room_code", "ROOM001"))
+        requested_player_name = normalize_player_name(st.session_state.get("battle_player_name", "Player"))
+        room_joined_now = is_player_joined_room(requested_room_code, requested_player_name)
+
+        room_col1, room_col2 = st.columns(2)
+        with room_col1:
+            if st.button("➕ 建立房間", use_container_width=True):
+                ok, msg = create_battle_room(requested_room_code, requested_player_name, st.session_state.get("setting_interval_label", "日線"), st.session_state.get("setting_challenge_bars", 120))
+                if ok:
+                    st.session_state.battle_room_joined = True
+                    st.session_state.battle_joined_room_code = requested_room_code
+                    st.session_state.battle_room_owner = True
+                    st.session_state.pending_new_challenge = True
+                st.session_state.battle_room_notice = msg
+                st.rerun()
+
+        with room_col2:
+            if st.button("🚪 加入房間", use_container_width=True):
+                ok, msg = join_battle_room(requested_room_code, requested_player_name, st.session_state.get("setting_interval_label", "日線"), st.session_state.get("setting_challenge_bars", 120))
+                if ok:
+                    st.session_state.battle_room_joined = True
+                    st.session_state.battle_joined_room_code = requested_room_code
+                    st.session_state.battle_room_owner = False
+                    st.session_state.pending_new_challenge = True
+                st.session_state.battle_room_notice = msg
+                st.rerun()
+
+        if st.session_state.get("battle_room_notice"):
+            if room_joined_now or str(st.session_state.battle_room_notice).startswith("已"):
+                st.success(st.session_state.battle_room_notice)
+            else:
+                st.warning(st.session_state.battle_room_notice)
+
+        if is_player_joined_room(requested_room_code, requested_player_name):
+            st.success(f"目前已在房間：{requested_room_code}")
+        else:
+            st.warning("尚未加入這個房間。請先建立房間或加入房間，才會出現在房間玩家列表並可提交成績。")
+
+        if st.button("🔄 刷新房間玩家", use_container_width=True):
+            if is_player_joined_room(requested_room_code, requested_player_name):
+                register_battle_presence(requested_room_code, requested_player_name, st.session_state.get("setting_interval_label", "日線"), st.session_state.get("setting_challenge_bars", 120))
+            st.rerun()
+
         # 不使用 key="battle_question_no"，避免 Streamlit 禁止在 widget 建立後修改同名 session_state。
-        # 內部題號存在 st.session_state.battle_question_no，按「下一題」或工具列換題時才不會報錯。
         current_question_index = int(np.clip(int(st.session_state.get("battle_question_no", 1)), 1, BATTLE_QUESTION_COUNT)) - 1
         picked_battle_question_no = st.selectbox(
             "目前題目",
@@ -1237,6 +1441,9 @@ persist_settings_to_browser(settings_now)
 
 battle_room_code = normalize_room_code(st.session_state.get("battle_room_code", "ROOM001"))
 battle_player_name = normalize_player_name(st.session_state.get("battle_player_name", "Player"))
+battle_room_joined = is_player_joined_room(battle_room_code, battle_player_name)
+if mode == "對戰模式" and battle_room_joined:
+    register_battle_presence(battle_room_code, battle_player_name, interval_label, challenge_bars)
 battle_question_no = int(st.session_state.get("battle_question_no", 1))
 battle_question_no = int(np.clip(battle_question_no, 1, BATTLE_QUESTION_COUNT))
 st.session_state["battle_question_no"] = battle_question_no
@@ -1324,11 +1531,25 @@ st.progress(min(max(bars_passed / max(bars_total, 1), 0), 1))
 if mode == "對戰模式":
     st.markdown("### 🏆 對戰模式")
     st.warning("對戰模式已鎖定回看：不能按上一根或 -10，只能往下一根推進。")
-    b1, b2, b3, b4 = st.columns(4)
+    players_df = build_battle_room_players_df(battle_room_code)
+    online_count = int((players_df["狀態"] == "在線").sum()) if not players_df.empty and "狀態" in players_df.columns else 0
+    b1, b2, b3, b4, b5 = st.columns(5)
     b1.metric("房間號碼", battle_room_code)
     b2.metric("玩家", battle_player_name)
     b3.metric("目前題目", f"{battle_question_no} / {BATTLE_QUESTION_COUNT}")
     b4.metric("本題期末金額", f"{total_equity:,.0f}")
+    b5.metric("房間人數", f"{len(players_df)} 人", delta=f"在線 {online_count}")
+
+    if battle_room_joined:
+        st.success(f"你已加入房間 {battle_room_code}，其他玩家加入後會顯示在下方列表。")
+    else:
+        st.warning("你尚未加入此房間。請到左側按『建立房間』或『加入房間』，否則不會出現在玩家列表，也不能提交成績。")
+
+    with st.expander("👥 房間玩家 / 進入狀態", expanded=True):
+        if not players_df.empty:
+            st.dataframe(players_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("目前還沒有玩家加入此房間。")
 
     q_df = pd.DataFrame(
         [
@@ -1345,6 +1566,7 @@ if mode == "對戰模式":
 
     leaderboard_df = build_battle_leaderboard(battle_room_code)
     if not leaderboard_df.empty:
+        st.markdown("#### 🏆 房間排行榜")
         st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
     else:
         st.caption("目前房間還沒有玩家提交成績。完成每題後按「提交本題成績」即可上榜。")
@@ -1551,8 +1773,12 @@ if st.session_state.current_idx >= st.session_state.challenge_end_idx:
             st.info("你已提交過本題成績；再次提交會覆蓋本題分數。")
 
         c_submit, c_next = st.columns([1, 1])
+        can_submit_battle = battle_room_joined
+        if not can_submit_battle:
+            st.warning("請先在左側建立或加入房間，才能提交本題成績。")
+
         with c_submit:
-            if st.button("🏁 提交本題成績到房間排行榜", type="primary", use_container_width=True):
+            if st.button("🏁 提交本題成績到房間排行榜", type="primary", use_container_width=True, disabled=not can_submit_battle):
                 submit_battle_score(
                     room_code=battle_room_code,
                     player_name=battle_player_name,
