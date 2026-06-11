@@ -1,10 +1,14 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V14 Taiwan margin short-selling limits
+# Deployment version：V16 battle no-back: battle mode disables previous K controls
 
 import base64
+import hashlib
 import json
+import os
 import random
+import tempfile
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -28,7 +32,7 @@ st.set_page_config(
 )
 
 st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V14：依台股融券概念限制放空：融券保證金 90%、賣出價款凍結、維持率 130% 警戒，避免無限做空。")
+st.caption("V16：對戰模式禁止使用上一根 / -10 回看，只能往前作答；保留 5 題房間對戰、台股融券限制與圖表視角記憶。")
 st.markdown("---")
 
 # =========================================================
@@ -43,9 +47,14 @@ TW_SHORT_MARGIN_RATE = 0.90
 TW_MIN_MAINTENANCE_RATE = 1.30
 TW_SAFE_MAINTENANCE_RATE = 1.66
 
+# 對戰模式參數：同一房間號碼會產生相同 5 題。
+BATTLE_QUESTION_COUNT = 5
+BATTLE_STATE_FILE = os.path.join(tempfile.gettempdir(), "barreplay_battle_rooms_v15.json")
+BATTLE_DEFAULT_POOL_TEXT = "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409"
+
 DEFAULT_SETTINGS = {
     "mode": "闖關模式",
-    "stock_pool_text": "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409",
+    "stock_pool_text": BATTLE_DEFAULT_POOL_TEXT,
     "stock_code": "3037",
     "interval_label": "日線",
     "challenge_bars": 120,
@@ -99,7 +108,7 @@ def _normalize_loaded_settings(loaded: dict[str, Any]) -> dict[str, Any]:
         if key in settings:
             settings[key] = value
 
-    if settings["mode"] not in ["闖關模式", "自選練習"]:
+    if settings["mode"] not in ["闖關模式", "自選練習", "對戰模式"]:
         settings["mode"] = DEFAULT_SETTINGS["mode"]
 
     if settings["interval_label"] not in ["日線", "60 分線", "30 分線", "15 分線", "5 分線"]:
@@ -177,6 +186,10 @@ def init_session_state() -> None:
         "persisted_show_macd": DEFAULT_SETTINGS["show_macd"],
         "last_loaded_ticker": "",
         "last_yfinance_error": "",
+        "battle_room_code": "ROOM001",
+        "battle_player_name": "Player",
+        "battle_question_no": 1,
+        "battle_last_submit_message": "",
     }
 
     for key, value in core_defaults.items():
@@ -267,6 +280,168 @@ def persist_settings_to_browser(settings: dict[str, Any]) -> None:
         """,
         height=0,
     )
+
+
+
+# =========================================================
+# 1.5 Battle Mode Helpers
+# =========================================================
+def parse_stock_codes(text_value: str) -> list[str]:
+    codes = [code.strip() for code in str(text_value).replace("\n", ",").split(",") if code.strip()]
+    return list(dict.fromkeys(codes))
+
+
+def normalize_room_code(room_code: str) -> str:
+    cleaned = "".join(ch for ch in str(room_code).strip().upper() if ch.isalnum() or ch in ["-", "_"])
+    return cleaned or "ROOM001"
+
+
+def normalize_player_name(player_name: str) -> str:
+    cleaned = str(player_name).strip()
+    return cleaned[:24] if cleaned else "Player"
+
+
+def stable_hash_int(text_value: str) -> int:
+    digest = hashlib.sha256(str(text_value).encode("utf-8")).hexdigest()
+    return int(digest[:16], 16)
+
+
+def build_battle_questions(room_code: str, interval_label: str, challenge_bars: int) -> list[dict[str, Any]]:
+    """用房間號碼決定 5 題。為了確保所有玩家只要輸入相同房號就拿到同題，對戰模式使用固定股票池。"""
+    room = normalize_room_code(room_code)
+    base_pool = parse_stock_codes(BATTLE_DEFAULT_POOL_TEXT)
+    rng = random.Random(stable_hash_int(f"BARREPLAY_BATTLE|{room}|{interval_label}|{challenge_bars}"))
+
+    if len(base_pool) >= BATTLE_QUESTION_COUNT:
+        selected_codes = rng.sample(base_pool, BATTLE_QUESTION_COUNT)
+    else:
+        selected_codes = [rng.choice(base_pool) for _ in range(BATTLE_QUESTION_COUNT)]
+
+    questions = []
+    for idx, code in enumerate(selected_codes, start=1):
+        questions.append(
+            {
+                "question_no": idx,
+                "stock_code": code,
+                "seed": f"BARREPLAY_BATTLE|{room}|Q{idx}|{code}|{interval_label}|{challenge_bars}",
+            }
+        )
+    return questions
+
+
+def load_battle_state() -> dict[str, Any]:
+    try:
+        if os.path.exists(BATTLE_STATE_FILE):
+            with open(BATTLE_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data.setdefault("rooms", {})
+                return data
+    except Exception:
+        pass
+    return {"rooms": {}}
+
+
+def save_battle_state(state: dict[str, Any]) -> None:
+    try:
+        tmp_file = BATTLE_STATE_FILE + ".tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_file, BATTLE_STATE_FILE)
+    except Exception as e:
+        st.warning(f"對戰成績儲存失敗：{e}")
+
+
+def submit_battle_score(
+    room_code: str,
+    player_name: str,
+    question_no: int,
+    final_equity: float,
+    return_pct: float,
+    ticker: str,
+    interval_label: str,
+    challenge_bars: int,
+    trade_count: int,
+) -> None:
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    q_key = str(int(question_no))
+    state = load_battle_state()
+    room_data = state.setdefault("rooms", {}).setdefault(
+        room,
+        {
+            "room_code": room,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "question_count": BATTLE_QUESTION_COUNT,
+            "players": {},
+        },
+    )
+    room_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    room_data["interval_label"] = interval_label
+    room_data["challenge_bars"] = int(challenge_bars)
+
+    player_data = room_data.setdefault("players", {}).setdefault(
+        player,
+        {
+            "player_name": player,
+            "scores": {},
+            "joined_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    player_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    player_data.setdefault("scores", {})[q_key] = {
+        "question_no": int(question_no),
+        "ticker": str(ticker),
+        "final_equity": round(float(final_equity), 2),
+        "return_pct": round(float(return_pct), 4),
+        "trade_count": int(trade_count),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    save_battle_state(state)
+
+
+def build_battle_leaderboard(room_code: str) -> pd.DataFrame:
+    room = normalize_room_code(room_code)
+    state = load_battle_state()
+    players = state.get("rooms", {}).get(room, {}).get("players", {})
+    rows = []
+
+    for player, pdata in players.items():
+        scores = pdata.get("scores", {}) if isinstance(pdata, dict) else {}
+        completed = len(scores)
+        total_equity_sum = sum(float(item.get("final_equity", 0.0)) for item in scores.values())
+        avg_return = np.mean([float(item.get("return_pct", 0.0)) for item in scores.values()]) if scores else 0.0
+        latest_submit = max([str(item.get("submitted_at", "")) for item in scores.values()], default="")
+        rows.append(
+            {
+                "玩家": player,
+                "完成題數": completed,
+                "五題總金額": total_equity_sum if completed == BATTLE_QUESTION_COUNT else np.nan,
+                "目前累計金額": total_equity_sum,
+                "平均報酬率%": round(float(avg_return), 2),
+                "最後提交": latest_submit.replace("T", " ")[:19] if latest_submit else "",
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(columns=["排名", "玩家", "完成題數", "五題總金額", "目前累計金額", "平均報酬率%", "最後提交"])
+
+    df_rank = pd.DataFrame(rows)
+    df_rank["已完成五題"] = df_rank["完成題數"] == BATTLE_QUESTION_COUNT
+    df_rank = df_rank.sort_values(
+        by=["已完成五題", "五題總金額", "完成題數", "目前累計金額"],
+        ascending=[False, False, False, False],
+        na_position="last",
+    ).drop(columns=["已完成五題"]).reset_index(drop=True)
+    df_rank.insert(0, "排名", np.arange(1, len(df_rank) + 1))
+    return df_rank
+
+
+def get_player_battle_scores(room_code: str, player_name: str) -> dict[str, Any]:
+    state = load_battle_state()
+    room = normalize_room_code(room_code)
+    player = normalize_player_name(player_name)
+    return state.get("rooms", {}).get(room, {}).get("players", {}).get(player, {}).get("scores", {})
 
 
 init_session_state()
@@ -573,7 +748,13 @@ def reset_account(initial_cash: float) -> None:
     st.session_state.trade_log = []
 
 
-def setup_challenge(df: pd.DataFrame, challenge_bars: int, initial_cash: float, random_start: bool) -> None:
+def setup_challenge(
+    df: pd.DataFrame,
+    challenge_bars: int,
+    initial_cash: float,
+    random_start: bool,
+    deterministic_seed: str | None = None,
+) -> None:
     min_start = max(120, min(300, len(df) // 5))
 
     if len(df) < challenge_bars + min_start + 5:
@@ -581,7 +762,11 @@ def setup_challenge(df: pd.DataFrame, challenge_bars: int, initial_cash: float, 
         end_idx = len(df) - 1
     else:
         max_start = len(df) - challenge_bars - 1
-        start_idx = random.randint(min_start, max_start) if random_start else min_start
+        if deterministic_seed:
+            rng = random.Random(stable_hash_int(deterministic_seed))
+            start_idx = rng.randint(min_start, max_start)
+        else:
+            start_idx = random.randint(min_start, max_start) if random_start else min_start
         end_idx = min(start_idx + challenge_bars, len(df) - 1)
 
     st.session_state.challenge_start_idx = int(start_idx)
@@ -872,6 +1057,8 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 #toolbar{height:76px;display:flex;align-items:center;align-content:center;gap:5px;padding:5px 8px;box-sizing:border-box;background:#151a23;border-bottom:1px solid rgba(255,255,255,0.08);user-select:none;overflow-x:visible;white-space:normal;flex-wrap:wrap;}
 .tool-btn{height:30px;padding:0 8px;background:#202736;color:#d1d4dc;border:1px solid #343b4a;border-radius:6px;cursor:pointer;font-size:13px;white-space:nowrap;flex:0 0 auto;}
 .tool-btn:hover{background:#2d3547;}.tool-btn.active{background:#2962ff;border-color:#2962ff;color:white;}
+.tool-btn.disabled{opacity:.38;cursor:not-allowed;background:#1b202b;border-color:#2a3040;color:#6f7786;}
+.tool-btn.disabled:hover{background:#1b202b;}
 .toolbar-sep{height:24px;width:1px;background:rgba(255,255,255,0.18);margin:0 4px;flex:0 0 auto;}
 .action-btn{background:#263047;border-color:#44506a;}
 .trade-btn{background:#2b263a;border-color:#5c4a82;}
@@ -883,14 +1070,22 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 <body>
 <div id="wrap">
 <div id="toolbar">
-<button class="tool-btn active" data-tool="cursor">游標</button><span class="toolbar-sep"></span><button class="tool-btn action-btn" data-action="-10">⏮ -10</button><button class="tool-btn action-btn" data-action="上一根">⬅ 上一根</button><button class="tool-btn action-btn" data-action="下一根">➡ 下一根</button><button class="tool-btn action-btn" data-action="+10">⏭ +10</button><button class="tool-btn action-btn" data-action="下一關">🎲 下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入做多">買</button><button class="tool-btn trade-btn" data-action="賣出多單">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補空單">補</button><button class="tool-btn trade-btn" data-action="全部平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
+<button class="tool-btn active" data-tool="cursor">游標</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">⏮ -10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">⬅ 上一根</button><button class="tool-btn action-btn" data-action="下一根">➡ 下一根</button><button class="tool-btn action-btn" data-action="+10">⏭ +10</button><button class="tool-btn action-btn" data-action="下一關">🎲 下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入做多">買</button><button class="tool-btn trade-btn" data-action="賣出多單">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補空單">補</button><button class="tool-btn trade-btn" data-action="全部平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
 </div>
 <div id="chartBox"><div id="mainChart"></div><canvas id="drawCanvas"></canvas></div><div id="macdBox"><div id="macdChart"></div></div>
 </div>
 <script>
-const candleData=__CANDLES__;const volumeData=__VOLUMES__;const indicatorPayload=__INDICATORS__;const markers=__MARKERS__;const macdPayload=__MACD__;const showMacd=__SHOW_MACD__;const drawingsKey=__DRAWINGS_KEY__;const viewKey=__VIEW_KEY__;
+const candleData=__CANDLES__;const volumeData=__VOLUMES__;const indicatorPayload=__INDICATORS__;const markers=__MARKERS__;const macdPayload=__MACD__;const showMacd=__SHOW_MACD__;const drawingsKey=__DRAWINGS_KEY__;const viewKey=__VIEW_KEY__;const allowBackActions=__ALLOW_BACK_ACTIONS__;
 const chartBox=document.getElementById("chartBox");const canvas=document.getElementById("drawCanvas");const ctx=canvas.getContext("2d");const statusEl=document.getElementById("status");
 const timeLabelMap={};candleData.forEach(d=>{timeLabelMap[d.time]=d.label;});
+if(!allowBackActions){
+    document.querySelectorAll('.back-btn').forEach(btn=>{
+        btn.classList.add('disabled');
+        btn.setAttribute('aria-disabled','true');
+        btn.title='對戰模式禁止回看，只能往前作答';
+    });
+}
+function isBackAction(keyword){return keyword==='上一根'||keyword==='-10'||String(keyword).includes('上一根');}
 let tool="cursor";let firstPoint=null;let drawings=[];try{drawings=JSON.parse(localStorage.getItem(drawingsKey)||"[]");if(!Array.isArray(drawings))drawings=[];}catch(e){drawings=[];}
 const chart=LightweightCharts.createChart(document.getElementById("mainChart"),{layout:{background:{color:"#0f131a"},textColor:"#d1d4dc"},localization:{timeFormatter:(time)=>timeLabelMap[time]||String(time)},grid:{vertLines:{color:"rgba(255,255,255,0.08)"},horzLines:{color:"rgba(255,255,255,0.08)"}},rightPriceScale:{borderColor:"rgba(255,255,255,0.15)"},timeScale:{borderColor:"rgba(255,255,255,0.15)",timeVisible:true,secondsVisible:false,tickMarkFormatter:(time)=>timeLabelMap[time]||""},crosshair:{mode:LightweightCharts.CrosshairMode.Normal},handleScale:true,handleScroll:true});
 const candleSeries=chart.addCandlestickSeries({upColor:"#ef5350",downColor:"#26a69a",borderUpColor:"#ef5350",borderDownColor:"#26a69a",wickUpColor:"#ef5350",wickDownColor:"#26a69a"});candleSeries.setData(candleData);if(markers.length>0)candleSeries.setMarkers(markers);
@@ -921,10 +1116,10 @@ if(d.type==="text"){const x=toX(d.time),y=toY(d.price);if(x===null||y===null){ct
 function distanceToSegment(px,py,x1,y1,x2,y2){const A=px-x1,B=py-y1,C=x2-x1,D=y2-y1;const dot=A*C+B*D,lenSq=C*C+D*D;let param=-1;if(lenSq!==0)param=dot/lenSq;let xx,yy;if(param<0){xx=x1;yy=y1;}else if(param>1){xx=x2;yy=y2;}else{xx=x1+param*C;yy=y1+param*D;}const dx=px-xx,dy=py-yy;return Math.sqrt(dx*dx+dy*dy);}
 function hitTest(px,py){for(let i=drawings.length-1;i>=0;i--){const d=drawings[i];if(d.type==="hline"){const y=toY(d.price);if(y!==null&&Math.abs(py-y)<8)return i;}if(d.type==="vline"){const x=toX(d.time);if(x!==null&&Math.abs(px-x)<8)return i;}if(d.type==="trend"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;if(distanceToSegment(px,py,x1,y1,x2,y2)<8)return i;}if(d.type==="rect"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;const left=Math.min(x1,x2),right=Math.max(x1,x2),top=Math.min(y1,y2),bottom=Math.max(y1,y2);if(px>=left&&px<=right&&py>=top&&py<=bottom)return i;}if(d.type==="fib"){const x1=toX(d.time1),x2=toX(d.time2);if(x1===null||x2===null)continue;const left=Math.min(x1,x2),right=Math.max(x1,x2);if(px<left-10||px>right+10)continue;for(const r of [0,.236,.382,.5,.618,.786,1]){const y=toY(d.high-(d.high-d.low)*r);if(y!==null&&Math.abs(py-y)<8)return i;}}if(d.type==="text"){const x=toX(d.time),y=toY(d.price);if(x!==null&&y!==null&&Math.abs(px-x)<60&&Math.abs(py-y)<20)return i;}}return -1;}
 canvas.addEventListener("click",e=>{const p=getMousePoint(e);if(!p)return;if(tool==="delete"){const idx=hitTest(p.x,p.y);if(idx>=0){drawings.splice(idx,1);saveDrawings();}return;}if(tool==="hline"){drawings.push({type:"hline",price:p.price,color:"#ffca28",width:2,text:"水平線"});saveDrawings();return;}if(tool==="vline"){drawings.push({type:"vline",time:p.time,color:"#64b5f6",width:2,text:"關鍵K"});saveDrawings();return;}if(tool==="text"){const text=prompt("輸入標註文字：","關鍵位置");if(text===null)return;drawings.push({type:"text",time:p.time,price:p.price,color:"#ffca28",text:text});saveDrawings();return;}if(tool==="trend"){if(!firstPoint){firstPoint=p;statusEl.innerText="趨勢線：已設定起點，請點終點";return;}drawings.push({type:"trend",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:""});firstPoint=null;saveDrawings();return;}if(tool==="rect"){if(!firstPoint){firstPoint=p;statusEl.innerText="矩形：已設定第一點，請點第二點";return;}drawings.push({type:"rect",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:"區間"});firstPoint=null;saveDrawings();return;}if(tool==="fib"){if(!firstPoint){firstPoint=p;statusEl.innerText="斐波那契：已設定第一點，請點第二點";return;}drawings.push({type:"fib",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,high:Math.max(firstPoint.price,p.price),low:Math.min(firstPoint.price,p.price),color:"#ffca28",width:1.5,text:"Fib"});firstPoint=null;saveDrawings();return;}});
-function clickParentButtonByText(keyword){try{saveViewRange();}catch(e){}try{const buttons=Array.from(window.parent.document.querySelectorAll("button"));const target=buttons.find(btn=>btn.innerText&&btn.innerText.includes(keyword));if(target){target.click();return;}}catch(e){console.log("Direct parent click failed:",e);}try{window.parent.postMessage({type:"tv_replay_action",keyword:keyword},"*");}catch(e){console.log("postMessage failed:",e);}}
+function clickParentButtonByText(keyword){if(!allowBackActions&&isBackAction(keyword)){statusEl.innerText="對戰模式禁止回看，只能往前作答";return;}try{saveViewRange();}catch(e){}try{const buttons=Array.from(window.parent.document.querySelectorAll("button"));const target=buttons.find(btn=>btn.innerText&&btn.innerText.includes(keyword));if(target&&!target.disabled){target.click();return;}}catch(e){console.log("Direct parent click failed:",e);}try{window.parent.postMessage({type:"tv_replay_action",keyword:keyword},"*");}catch(e){console.log("postMessage failed:",e);}}
 document.querySelectorAll(".action-btn[data-action], .trade-btn[data-action]").forEach(btn=>btn.addEventListener("click",()=>clickParentButtonByText(btn.dataset.action)));
-document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLowerCase();if(tag==="input"||tag==="textarea"||e.target.isContentEditable)return;if(e.key==="ArrowLeft"){e.preventDefault();clickParentButtonByText("上一根");}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
-window.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();clickParentButtonByText("上一根");}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
+document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLowerCase();if(tag==="input"||tag==="textarea"||e.target.isContentEditable)return;if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
+window.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
 chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);drawAll();
 </script>
 </body>
@@ -932,7 +1127,7 @@ chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRang
 '''
 
 
-def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, show_macd, trade_log, df_all, blind_mode, ticker, interval, challenge_start_idx, challenge_id, height) -> None:
+def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, show_macd, trade_log, df_all, blind_mode, ticker, interval, challenge_start_idx, challenge_id, height, allow_back_actions=True) -> None:
     candles = make_candle_data(visible_df, blind_mode=blind_mode, challenge_start_idx=challenge_start_idx)
     volumes = make_volume_data(visible_df) if show_volume else []
     indicators = build_indicator_payload(indicator_df, selected_indicators)
@@ -966,9 +1161,10 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__MACD__", json.dumps(macd_payload, ensure_ascii=False))
         .replace("__SHOW_MACD__", json.dumps(show_macd))
         .replace("__DRAWINGS_KEY__", json.dumps(drawings_key, ensure_ascii=False))
-        .replace("__VIEW_KEY__", json.dumps(view_key, ensure_ascii=False)))
+        .replace("__VIEW_KEY__", json.dumps(view_key, ensure_ascii=False))
+        .replace("__ALLOW_BACK_ACTIONS__", json.dumps(bool(allow_back_actions))))
 
-    html_code = f"<!-- BARREPLAY_V13_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V16_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -980,20 +1176,33 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V14-tw-short-rules（放空需 90% 保證金，賣出價款凍結，維持率 130% 警戒）")
+    st.caption("目前版本：V16-battle-no-back（對戰模式禁止上一根 / -10，只能往前作答）")
 
-    mode = st.radio("模式", ["闖關模式", "自選練習"], key="setting_mode")
+    mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
     stock_pool_text = st.text_area("隨機股票池", height=90, key="setting_stock_pool_text")
-    stock_pool = [code.strip() for code in stock_pool_text.replace("\n", ",").split(",") if code.strip()]
+    stock_pool = parse_stock_codes(stock_pool_text)
 
-    if st.button("🎲 隨機開新關卡", use_container_width=True):
-        if stock_pool:
-            st.session_state.pending_stock_code = random.choice(stock_pool)
-            st.session_state.pending_new_challenge = True
-            st.rerun()
+    if mode == "對戰模式":
+        st.markdown("---")
+        st.subheader("🏁 對戰房間")
+        st.text_input("房間號碼", key="battle_room_code", help="同一個房間號碼會產生同樣 5 題。")
+        st.text_input("玩家名稱", key="battle_player_name")
+        st.selectbox(
+            "目前題目",
+            list(range(1, BATTLE_QUESTION_COUNT + 1)),
+            key="battle_question_no",
+            format_func=lambda x: f"第 {x} / {BATTLE_QUESTION_COUNT} 題",
+        )
+        st.caption("對戰模式使用固定預設股票池，確保只靠房間號碼就能讓所有玩家拿到同樣題目。")
+    else:
+        if st.button("🎲 隨機開新關卡", use_container_width=True):
+            if stock_pool:
+                st.session_state.pending_stock_code = random.choice(stock_pool)
+                st.session_state.pending_new_challenge = True
+                st.rerun()
 
-    raw_code_input = st.text_input("目前股票代號", key="stock_code")
+    raw_code_input = st.text_input("目前股票代號", key="stock_code", disabled=(mode == "對戰模式"))
 
     interval_map = {"日線": "1d", "60 分線": "60m", "30 分線": "30m", "15 分線": "15m", "5 分線": "5m"}
     interval_label = st.selectbox("K 線週期", list(interval_map.keys()), key="setting_interval_label")
@@ -1019,7 +1228,19 @@ with st.sidebar:
 settings_now = collect_current_settings()
 persist_settings_to_browser(settings_now)
 
-raw_code = str(st.session_state.stock_code).strip()
+battle_room_code = normalize_room_code(st.session_state.get("battle_room_code", "ROOM001"))
+battle_player_name = normalize_player_name(st.session_state.get("battle_player_name", "Player"))
+battle_question_no = int(st.session_state.get("battle_question_no", 1))
+battle_question_no = int(np.clip(battle_question_no, 1, BATTLE_QUESTION_COUNT))
+st.session_state.battle_question_no = battle_question_no
+battle_questions = build_battle_questions(battle_room_code, interval_label, challenge_bars)
+battle_question = battle_questions[battle_question_no - 1]
+
+if mode == "對戰模式":
+    raw_code = str(battle_question["stock_code"]).strip()
+else:
+    raw_code = str(st.session_state.stock_code).strip()
+
 # load_data 會負責嘗試 .TW / .TWO，這裡只先組出常用顯示 ticker。
 ticker = raw_code if raw_code.upper().endswith(".TW") or raw_code.upper().endswith(".TWO") else f"{raw_code}.TW"
 
@@ -1037,14 +1258,21 @@ if df.empty:
 
 df = add_indicators(df)
 actual_loaded_ticker = st.session_state.get("last_loaded_ticker", ticker)
-config_key = f"{actual_loaded_ticker}_{period}_{interval}_{challenge_bars}_{target_return_pct}_{initial_cash}_{mode}"
+battle_seed = str(battle_question["seed"]) if mode == "對戰模式" else None
+config_key = f"{actual_loaded_ticker}_{period}_{interval}_{challenge_bars}_{target_return_pct}_{initial_cash}_{mode}_{battle_room_code}_{battle_question_no}_{battle_seed}"
 
 if st.session_state.last_config_key != config_key or st.session_state.pending_new_challenge:
     st.session_state.last_config_key = config_key
-    setup_challenge(df=df, challenge_bars=challenge_bars, initial_cash=initial_cash, random_start=(mode == "闖關模式"))
+    setup_challenge(
+        df=df,
+        challenge_bars=challenge_bars,
+        initial_cash=initial_cash,
+        random_start=(mode == "闖關模式"),
+        deterministic_seed=battle_seed,
+    )
     st.session_state.pending_new_challenge = False
 
-if mode == "闖關模式":
+if mode in ["闖關模式", "對戰模式"]:
     min_idx = st.session_state.challenge_start_idx
     max_idx = st.session_state.challenge_end_idx
 else:
@@ -1063,7 +1291,11 @@ bars_passed = int(st.session_state.current_idx - st.session_state.challenge_star
 bars_total = int(st.session_state.challenge_end_idx - st.session_state.challenge_start_idx)
 bars_left = max(0, bars_total - bars_passed)
 stock_name = "" if blind_mode else get_stock_name(actual_loaded_ticker)
-show_title = "隨機盲測標的" if blind_mode else f"{actual_loaded_ticker} {stock_name}"
+if mode == "對戰模式":
+    battle_prefix = f"房間 {battle_room_code}｜第 {battle_question_no}/{BATTLE_QUESTION_COUNT} 題"
+    show_title = f"{battle_prefix}｜隨機盲測標的" if blind_mode else f"{battle_prefix}｜{actual_loaded_ticker} {stock_name}"
+else:
+    show_title = "隨機盲測標的" if blind_mode else f"{actual_loaded_ticker} {stock_name}"
 show_time = f"D+{bars_passed}" if blind_mode else current_row["TimeStr"]
 
 # =========================================================
@@ -1081,6 +1313,34 @@ g2.metric("過關目標", f"{target_return_pct:.2f}%")
 g3.metric("總資產", f"{total_equity:,.0f}")
 g4.metric("目前時間", show_time)
 st.progress(min(max(bars_passed / max(bars_total, 1), 0), 1))
+
+if mode == "對戰模式":
+    st.markdown("### 🏆 對戰模式")
+    st.warning("對戰模式已鎖定回看：不能按上一根或 -10，只能往下一根推進。")
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("房間號碼", battle_room_code)
+    b2.metric("玩家", battle_player_name)
+    b3.metric("目前題目", f"{battle_question_no} / {BATTLE_QUESTION_COUNT}")
+    b4.metric("本題期末金額", f"{total_equity:,.0f}")
+
+    q_df = pd.DataFrame(
+        [
+            {
+                "題號": item["question_no"],
+                "狀態": "目前" if item["question_no"] == battle_question_no else "待作答",
+                "股票代號": "盲測中" if blind_mode else item["stock_code"],
+            }
+            for item in battle_questions
+        ]
+    )
+    with st.expander("查看本房 5 題清單"):
+        st.dataframe(q_df, use_container_width=True, hide_index=True)
+
+    leaderboard_df = build_battle_leaderboard(battle_room_code)
+    if not leaderboard_df.empty:
+        st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("目前房間還沒有玩家提交成績。完成每題後按「提交本題成績」即可上榜。")
 
 # =========================================================
 # 9.5 Indicator Checkboxes
@@ -1106,6 +1366,8 @@ st.session_state.persisted_show_macd = bool(show_macd)
 settings_now = collect_current_settings()
 persist_settings_to_browser(settings_now)
 
+allow_back_actions = mode != "對戰模式"
+
 # =========================================================
 # 10. Replay Control
 # =========================================================
@@ -1113,13 +1375,13 @@ st.markdown("### 🕹️ 重播控制")
 replay_col1, replay_col2, replay_col3, replay_col4, replay_col5, replay_col6 = st.columns([1, 1.3, 1.8, 1.8, 1.3, 1])
 
 with replay_col1:
-    if st.button("⏮️ -10", use_container_width=True):
+    if st.button("⏮️ -10", use_container_width=True, disabled=not allow_back_actions):
         st.session_state.current_idx = max(min_idx, st.session_state.current_idx - 10)
         st.session_state.show_answer = False
         st.rerun()
 
 with replay_col2:
-    if st.button("⬅️ 上一根", use_container_width=True):
+    if st.button("⬅️ 上一根", use_container_width=True, disabled=not allow_back_actions):
         st.session_state.current_idx = max(min_idx, st.session_state.current_idx - 1)
         st.session_state.show_answer = False
         st.rerun()
@@ -1143,12 +1405,15 @@ with replay_col5:
 
 with replay_col6:
     if st.button("🎲 下一關", use_container_width=True):
-        if stock_pool:
-            st.session_state.pending_stock_code = random.choice(stock_pool)
+        if mode == "對戰模式":
+            st.session_state.battle_question_no = min(BATTLE_QUESTION_COUNT, int(st.session_state.battle_question_no) + 1)
+        else:
+            if stock_pool:
+                st.session_state.pending_stock_code = random.choice(stock_pool)
         st.session_state.pending_new_challenge = True
         st.rerun()
 
-st.caption("快捷鍵：`←` 上一根，`→` 下一根。即使滑鼠點在圖表內，也可以使用左右鍵。")
+st.caption("快捷鍵：`→` 下一根。對戰模式禁止 `←` 上一根與 `-10` 回看；非對戰模式仍可使用左右鍵。")
 
 # =========================================================
 # 11. Account / Trade Panel
@@ -1245,6 +1510,7 @@ render_tv_chart(
     challenge_start_idx=st.session_state.challenge_start_idx,
     challenge_id=challenge_id,
     height=chart_height,
+    allow_back_actions=allow_back_actions,
 )
 
 if selected_indicators:
@@ -1270,6 +1536,42 @@ if st.session_state.current_idx >= st.session_state.challenge_end_idx:
 
     level = "S 級" if return_pct >= 20 else "A 級" if return_pct >= 10 else "B 級" if return_pct >= 5 else "C 級" if return_pct >= 0 else "D 級"
     st.metric("本關評級", level)
+
+    if mode == "對戰模式":
+        submitted_scores = get_player_battle_scores(battle_room_code, battle_player_name)
+        already_submitted = str(battle_question_no) in submitted_scores
+        if already_submitted:
+            st.info("你已提交過本題成績；再次提交會覆蓋本題分數。")
+
+        c_submit, c_next = st.columns([1, 1])
+        with c_submit:
+            if st.button("🏁 提交本題成績到房間排行榜", type="primary", use_container_width=True):
+                submit_battle_score(
+                    room_code=battle_room_code,
+                    player_name=battle_player_name,
+                    question_no=battle_question_no,
+                    final_equity=total_equity,
+                    return_pct=return_pct,
+                    ticker=actual_loaded_ticker,
+                    interval_label=interval_label,
+                    challenge_bars=challenge_bars,
+                    trade_count=len(st.session_state.trade_log),
+                )
+                st.session_state.battle_last_submit_message = f"已提交第 {battle_question_no} 題：{total_equity:,.0f} 元"
+                st.rerun()
+        with c_next:
+            if st.button("➡️ 前往下一題", use_container_width=True, disabled=(battle_question_no >= BATTLE_QUESTION_COUNT)):
+                st.session_state.battle_question_no = min(BATTLE_QUESTION_COUNT, battle_question_no + 1)
+                st.session_state.pending_new_challenge = True
+                st.rerun()
+
+        if st.session_state.get("battle_last_submit_message"):
+            st.success(st.session_state.battle_last_submit_message)
+
+        latest_leaderboard = build_battle_leaderboard(battle_room_code)
+        if not latest_leaderboard.empty:
+            st.markdown("#### 🏆 最新房間排行榜")
+            st.dataframe(latest_leaderboard, use_container_width=True, hide_index=True)
 
 st.markdown("#### 📒 買賣紀錄")
 if st.session_state.trade_log:
