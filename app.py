@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V37 auto universe fallback fix
+# Deployment version：V38 restore indicator settings
 
 import base64
 import hashlib
@@ -53,7 +53,7 @@ st.markdown(
         color:#e5e7eb !important;
     }
     #MainMenu, footer {visibility: hidden;}
-    /* V37：自動股票池穩定版 + 空代號防呆 + 趨勢線無限延伸。 */
+    /* V38：恢復設定彈窗內的 MA/EMA/VWAP/MACD 指標選項。 */
     header[data-testid="stHeader"] {
         display:none !important;
         height:0 !important;
@@ -2698,7 +2698,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V37_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V38_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2712,7 +2712,7 @@ if st.session_state.get("pending_stock_code") is not None:
 @st.dialog("設定", width="large")
 def render_settings_dialog() -> None:
     st.header("設定")
-    st.caption("版本：V37-auto-pool-fallback-fix")
+    st.caption("版本：V38-restore-ma-settings")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2956,6 +2956,25 @@ def render_settings_dialog() -> None:
     blind_mode = st.checkbox("盲測模式：隱藏股票與日期", key="setting_blind_mode")
     show_volume = st.checkbox("顯示成交量", key="setting_show_volume")
     chart_height = st.slider("圖表高度", min_value=600, max_value=1200, step=20, key="setting_chart_height")
+
+    st.markdown("---")
+    st.subheader("指標")
+    st.caption("勾選後會立即套用到 K 線圖；下一根、全螢幕、對戰模式都會保留。")
+
+    indicator_cols = st.columns(4)
+    for idx, indicator in enumerate(INDICATOR_OPTIONS):
+        with indicator_cols[idx % 4]:
+            st.checkbox(indicator, key=f"setting_indicator_{indicator}")
+
+    st.checkbox("顯示 MACD", key="setting_show_macd")
+
+    selected_now = [
+        name for name in INDICATOR_OPTIONS
+        if st.session_state.get(f"setting_indicator_{name}", False)
+    ]
+    if selected_now:
+        st.session_state.persisted_selected_indicators = selected_now.copy()
+    st.session_state.persisted_show_macd = bool(st.session_state.get("setting_show_macd", DEFAULT_SETTINGS["show_macd"]))
 
     st.markdown("---")
     if st.button("重設交易帳戶", use_container_width=True):
