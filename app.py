@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V29 dark fullscreen chart
+# Deployment version：V30 dark fullscreen chart + sidebar reopen fix
 
 import base64
 import hashlib
@@ -50,7 +50,29 @@ st.markdown(
         background:#0b0f16 !important;
         color:#e5e7eb !important;
     }
-    #MainMenu, footer, header {visibility: hidden;}
+    #MainMenu, footer {visibility: hidden;}
+    header[data-testid="stHeader"] {
+        visibility: visible !important;
+        background: rgba(11, 15, 22, 0.96) !important;
+        height: 2.6rem !important;
+        z-index: 999999 !important;
+    }
+    header[data-testid="stHeader"] * {visibility: visible !important;}
+    div[data-testid="stToolbar"] {display:none !important;}
+    div[data-testid="collapsedControl"],
+    div[data-testid="stSidebarCollapsedControl"],
+    button[data-testid="baseButton-headerNoPadding"] {
+        display:flex !important;
+        visibility:visible !important;
+        opacity:1 !important;
+        pointer-events:auto !important;
+        z-index:1000000 !important;
+    }
+    [data-testid="collapsedControl"] svg,
+    [data-testid="stSidebarCollapsedControl"] svg {
+        color:#e5e7eb !important;
+        fill:#e5e7eb !important;
+    }
     .block-container {
         padding-top: 1.1rem;
         padding-bottom: 2.5rem;
@@ -278,8 +300,10 @@ def install_battle_focus_mode(enabled: bool) -> None:
                 const style = doc.createElement('style');
                 style.id = 'barreplay-battle-focus-style-v22';
                 style.innerHTML = `
-                    header[data-testid="stHeader"]{display:none!important;}
+                    header[data-testid="stHeader"]{display:block!important;visibility:visible!important;background:rgba(11,15,22,.96)!important;height:2.6rem!important;z-index:999999!important;}
+                    header[data-testid="stHeader"] *{visibility:visible!important;}
                     div[data-testid="stToolbar"]{display:none!important;}
+                    div[data-testid="collapsedControl"],div[data-testid="stSidebarCollapsedControl"],button[data-testid="baseButton-headerNoPadding"]{display:flex!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;z-index:1000000!important;}
                     div.block-container{padding-top:0.25rem!important;padding-left:0.45rem!important;padding-right:0.45rem!important;max-width:100%!important;}
                     #MainMenu, footer{display:none!important;}
                 `;
@@ -2225,7 +2249,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V29_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V30_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2237,7 +2261,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("設定")
-    st.caption("版本：V29-dark-fullscreen-overlay")
+    st.caption("版本：V30-sidebar-reopen-fix")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
