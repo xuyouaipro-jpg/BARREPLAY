@@ -550,6 +550,37 @@ def init_session_state() -> None:
         st.session_state.settings_initialized = True
 
 
+# V39：st.dialog 內的 widget 如果關閉後沒有被渲染，Streamlit 可能在下一次 rerun 清掉它的值。
+# 這會造成「已輸入玩家名稱 / 模式 / 指標」在按下一根後消失，進而跳回要求輸入名稱的畫面。
+# 解法是在每次執行初期把重要 widget key 指派給自己，阻止 Streamlit 清掉未渲染 widget 的狀態。
+PERSISTENT_DIALOG_WIDGET_KEYS = [
+    "setting_mode",
+    "stock_code",
+    "setting_interval_label",
+    "setting_challenge_bars",
+    "setting_target_return_pct",
+    "setting_initial_cash",
+    "setting_lookback_bars",
+    "setting_blind_mode",
+    "setting_show_volume",
+    "setting_chart_height",
+    "setting_show_macd",
+    "battle_room_code",
+    "battle_player_name",
+    "battle_question_no",
+    "battle_room_question_count",
+    "battle_time_limit_minutes",
+]
+PERSISTENT_DIALOG_WIDGET_KEYS += [f"setting_indicator_{name}" for name in INDICATOR_OPTIONS]
+
+
+def preserve_dialog_widget_state() -> None:
+    for key in PERSISTENT_DIALOG_WIDGET_KEYS:
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
+
+
+
 def collect_current_settings() -> dict[str, Any]:
     indicator_keys = [f"setting_indicator_{name}" for name in INDICATOR_OPTIONS]
     has_any_indicator_key = any(key in st.session_state for key in indicator_keys)
@@ -1898,7 +1929,9 @@ def install_battle_membership_storage(room_code: str, player_name: str, joined: 
 
 
 init_session_state()
+preserve_dialog_widget_state()
 restore_battle_membership_from_query()
+preserve_dialog_widget_state()
 handle_refresh_cleanup_from_query()
 install_refresh_cleanup_probe()
 install_browser_settings_restore()
@@ -2698,7 +2731,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V38_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V39_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2712,7 +2745,7 @@ if st.session_state.get("pending_stock_code") is not None:
 @st.dialog("設定", width="large")
 def render_settings_dialog() -> None:
     st.header("設定")
-    st.caption("版本：V38-restore-ma-settings")
+    st.caption("版本：V39-dialog-state-persist")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -3029,15 +3062,19 @@ battle_time_limit_minutes = get_room_time_limit_from_data(battle_room_meta)
 
 if mode == "對戰模式":
     if not is_valid_player_name(battle_player_name):
-        st.error("請先在左側輸入玩家名稱。對戰模式必須取名字才能建立 / 加入 / 開始。")
+        st.error("請按『設定』輸入玩家名稱。對戰模式必須取名字才能建立 / 加入 / 開始。")
+        if st.button("開啟設定", key="open_settings_from_missing_name", use_container_width=False):
+            render_settings_dialog()
         st.stop()
 
     if not battle_room_joined:
-        st.info("請先在左側建立房間或加入房間。加入後會看到房間玩家列表，房主按開始後才會進入第 1 關。")
+        st.info("請按『設定』建立房間或加入房間。加入後會看到房間玩家列表，房主按開始後才會進入第 1 關。")
         players_df = build_battle_room_players_df(battle_room_code)
         if not players_df.empty:
             st.markdown("#### 房間玩家")
             st.dataframe(players_df, use_container_width=True, hide_index=True)
+        if st.button("開啟設定", key="open_settings_from_not_joined", use_container_width=False):
+            render_settings_dialog()
         st.stop()
 
     register_battle_presence(battle_room_code, battle_player_name, interval_label, challenge_bars)
