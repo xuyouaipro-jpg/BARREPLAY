@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V36 auto stock universe
+# Deployment version：V37 auto universe fallback fix
 
 import base64
 import hashlib
@@ -41,7 +41,7 @@ st.set_page_config(
 )
 
 st.title("BARREPLAY")
-st.caption("裸 K 復盤｜對戰模式｜自動股票池")
+st.caption("裸 K 復盤｜對戰模式｜自動股票池穩定版")
 
 # Minimal UI theme: remove visual noise and keep repeated controls compact.
 st.markdown(
@@ -53,7 +53,7 @@ st.markdown(
         color:#e5e7eb !important;
     }
     #MainMenu, footer {visibility: hidden;}
-    /* V36：自動股票池 + 趨勢線無限延伸。 */
+    /* V37：自動股票池穩定版 + 空代號防呆 + 趨勢線無限延伸。 */
     header[data-testid="stHeader"] {
         display:none !important;
         height:0 !important;
@@ -719,12 +719,93 @@ def _get_ticker_frame(downloaded: pd.DataFrame, ticker: str) -> pd.DataFrame:
     return downloaded.copy()
 
 
+def _safe_float_from_market_value(value: Any) -> float:
+    text = str(value).strip().replace(",", "").replace("--", "").replace("－", "")
+    if text in {"", "-"}:
+        return 0.0
+    try:
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _extract_daily_volume_from_row(row: Any) -> float:
+    """從 TWSE / TPEX 每日行情 row 盡量抓出成交股數，抓不到就回 0。"""
+    if isinstance(row, dict):
+        volume_keys = [
+            "TradeVolume", "tradeVolume", "TradingShares", "TradingVolume",
+            "成交股數", "成交股數(股)", "成交量", "成交量(股)", "成交張數",
+            "Volume", "volume",
+        ]
+        for key in volume_keys:
+            if key in row:
+                vol = _safe_float_from_market_value(row.get(key))
+                # 若欄位是張數，保守轉成股數。
+                if "張" in key and vol > 0:
+                    vol *= 1000
+                if vol > 0:
+                    return vol
+
+        # fallback：掃描可能像成交量的欄位名稱。
+        for key, value in row.items():
+            key_text = str(key)
+            if any(word in key_text for word in ["TradeVolume", "TradingShares", "成交股", "成交量", "成交張", "Volume"]):
+                vol = _safe_float_from_market_value(value)
+                if "張" in key_text and vol > 0:
+                    vol *= 1000
+                if vol > 0:
+                    return vol
+    return 0.0
+
+
+@st.cache_data(show_spinner=False, ttl=3 * 3600)
+def fetch_latest_volume_candidates() -> list[str]:
+    """先用交易所每日行情抓出最新成交量夠大的候選股，降低 Yahoo 掃描量。"""
+    candidates: list[str] = []
+    sources = [
+        ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", ".TW"),
+        ("https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json", ".TW"),
+        ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", ".TWO"),
+    ]
+
+    for url, suffix in sources:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                payload = resp.read().decode("utf-8-sig", errors="ignore")
+            data = json.loads(payload)
+            rows = data if isinstance(data, list) else data.get("data", []) if isinstance(data, dict) else []
+            for row in rows:
+                code = _extract_stock_code_from_row(row)
+                volume = _extract_daily_volume_from_row(row)
+                # 若最新成交量連 150 萬股都不到，通常不可能符合相對量 >= 1.5 且 30 日均量 >= 100 萬。
+                if code and volume >= AUTO_POOL_MIN_AVG_VOLUME * AUTO_POOL_MIN_REL_VOLUME:
+                    ticker = normalize_stock_for_yfinance(f"{code}{suffix}")
+                    if ticker not in candidates:
+                        candidates.append(ticker)
+        except Exception:
+            continue
+
+    return candidates or AUTO_POOL_FALLBACK_TICKERS.copy()
+
+
 @st.cache_data(show_spinner="正在自動篩選台股股票池...", ttl=AUTO_POOL_CACHE_HOURS * 3600)
 def get_auto_screened_stock_pool() -> list[str]:
-    """自動股票池：30 日平均成交量 >= 1M，且最新一日相對成交量 >= 1.5。"""
-    tickers = fetch_taiwan_stock_universe()
+    """自動股票池：30 日平均成交量 >= 1M，且最新一日相對成交量 >= 1.5。
+
+    V37 修正：不再一開頁就大量掃全台股，先用交易所每日成交量縮小候選股；
+    若 Yahoo Finance 被 Cloud 限流，會回退到候選股 / 內建高流動性清單，避免股票代號變成空字串。
+    """
+    candidates = fetch_latest_volume_candidates()
+    if not candidates:
+        return AUTO_POOL_FALLBACK_TICKERS.copy()
+
+    # 候選股太多時，先限制前段，避免 Streamlit Cloud 被 Yahoo Finance rate limit。
+    # 重新掃描仍會盡量符合條件；如果 Yahoo 被擋，至少會有穩定 fallback。
+    tickers = list(dict.fromkeys(candidates))[:180]
     selected: list[str] = []
-    chunk_size = 80
+    chunk_size = 30
+    yahoo_failed = False
 
     for start in range(0, len(tickers), chunk_size):
         chunk = tickers[start:start + chunk_size]
@@ -736,10 +817,15 @@ def get_auto_screened_stock_pool() -> list[str]:
                 group_by="ticker",
                 auto_adjust=False,
                 progress=False,
-                threads=True,
+                threads=False,
             )
         except Exception:
-            downloaded = pd.DataFrame()
+            yahoo_failed = True
+            continue
+
+        if downloaded is None or downloaded.empty:
+            yahoo_failed = True
+            continue
 
         for ticker in chunk:
             frame = _get_ticker_frame(downloaded, ticker)
@@ -760,7 +846,14 @@ def get_auto_screened_stock_pool() -> list[str]:
             if avg_volume_30 >= AUTO_POOL_MIN_AVG_VOLUME and relative_volume >= AUTO_POOL_MIN_REL_VOLUME:
                 selected.append(ticker)
 
-    return selected or AUTO_POOL_FALLBACK_TICKERS.copy()
+    if selected:
+        return list(dict.fromkeys(selected))
+
+    # Yahoo 被限流或沒資料時，不讓股票代號變空；改用交易所最新量候選股。
+    if yahoo_failed and candidates:
+        return list(dict.fromkeys(candidates))[:120]
+
+    return AUTO_POOL_FALLBACK_TICKERS.copy()
 
 
 def pick_random_auto_stock() -> str:
@@ -1858,6 +1951,9 @@ install_keyboard_shortcuts()
 def load_data(stock_ticker: str, stock_period: str, stock_interval: str) -> pd.DataFrame:
     """Cloud-friendly yfinance loader：台股會自動嘗試 .TW / .TWO。"""
     clean_ticker = str(stock_ticker).strip().upper()
+    # V37 防呆：避免自動股票池或瀏覽器舊設定造成空代號，變成 .TW / .TWO。
+    if clean_ticker in {"", ".TW", ".TWO"}:
+        clean_ticker = "2330.TW"
     tickers_to_try: list[str] = []
 
     if clean_ticker.endswith(".TW"):
@@ -2602,7 +2698,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V36_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V37_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2616,7 +2712,7 @@ if st.session_state.get("pending_stock_code") is not None:
 @st.dialog("設定", width="large")
 def render_settings_dialog() -> None:
     st.header("設定")
-    st.caption("版本：V36-auto-stock-universe")
+    st.caption("版本：V37-auto-pool-fallback-fix")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2985,6 +3081,13 @@ if mode == "對戰模式":
     raw_code = str(battle_question["stock_code"]).strip()
 else:
     raw_code = str(st.session_state.stock_code).strip()
+
+# V37 防呆：localStorage 舊資料或自動股票池限流時，可能讓股票代號變空，避免 ticker = .TW。
+if not raw_code or raw_code.upper() in {".TW", ".TWO"}:
+    raw_code = pick_random_auto_stock()
+    if not raw_code:
+        raw_code = "2330.TW"
+    st.session_state.stock_code = raw_code
 
 # load_data 會負責嘗試 .TW / .TWO，這裡只先組出常用顯示 ticker。
 ticker = raw_code if raw_code.upper().endswith(".TW") or raw_code.upper().endswith(".TWO") else f"{raw_code}.TW"
