@@ -550,7 +550,7 @@ def init_session_state() -> None:
         st.session_state.settings_initialized = True
 
 
-# V39：st.dialog 內的 widget 如果關閉後沒有被渲染，Streamlit 可能在下一次 rerun 清掉它的值。
+# V40：延續 V39 設定狀態保留，並在最後一根 K 線或時間到時自動強制平倉。
 # 這會造成「已輸入玩家名稱 / 模式 / 指標」在按下一根後消失，進而跳回要求輸入名稱的畫面。
 # 解法是在每次執行初期把重要 widget key 指派給自己，阻止 Streamlit 清掉未渲染 widget 的狀態。
 PERSISTENT_DIALOG_WIDGET_KEYS = [
@@ -2536,6 +2536,31 @@ def close_all(row: pd.Series, reason: str) -> tuple[bool, str]:
 def sell_all(row: pd.Series, reason: str) -> tuple[bool, str]:
     return close_all(row, reason)
 
+
+def force_close_once_at_end(row: pd.Series, close_key: str, reason: str) -> tuple[bool, str]:
+    """
+    關卡結束自動平倉。
+
+    用 close_key 確保同一題 / 同一關只會自動平倉一次，避免 Streamlit rerun 重複寫入交易紀錄。
+    """
+    if st.session_state.get(close_key, False):
+        return False, ""
+
+    st.session_state[close_key] = True
+
+    if int(st.session_state.get("shares", 0)) == 0:
+        return False, ""
+
+    ok, msg = close_all(row, reason)
+    if ok:
+        st.session_state.last_force_close_message = msg
+    return ok, msg
+
+
+def clear_force_close_message() -> None:
+    """切換新關卡或新題目時清除上一題的強制平倉提示。"""
+    st.session_state.last_force_close_message = ""
+
 # =========================================================
 # 6. TradingView-like Chart HTML
 # =========================================================
@@ -2731,7 +2756,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V39_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V40_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2745,7 +2770,7 @@ if st.session_state.get("pending_stock_code") is not None:
 @st.dialog("設定", width="large")
 def render_settings_dialog() -> None:
     st.header("設定")
-    st.caption("版本：V39-dialog-state-persist")
+    st.caption("版本：V40-force-close-on-end")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -3167,6 +3192,7 @@ config_key = f"{actual_loaded_ticker}_{period}_{interval}_{challenge_bars}_{targ
 
 if st.session_state.last_config_key != config_key or st.session_state.pending_new_challenge:
     st.session_state.last_config_key = config_key
+    clear_force_close_message()
     setup_challenge(
         df=df,
         challenge_bars=challenge_bars,
@@ -3203,6 +3229,26 @@ if mode == "對戰模式":
     battle_game_over = bool(battle_time_status.get("game_over", False))
     if battle_game_over:
         mark_battle_room_ended_if_needed(battle_room_code, battle_room_meta)
+
+# V40：不管闖關、自選或對戰，只要最後一根 K 線出現，或對戰時間到，系統就強制平倉。
+# 必須在對戰自動提交前處理，讓成績使用已平倉後的最終總資產。
+stage_finished_by_last_bar = st.session_state.current_idx >= st.session_state.challenge_end_idx
+stage_finished_by_timer = mode == "對戰模式" and battle_time_up
+stage_force_close_triggered = bool(stage_finished_by_last_bar or stage_finished_by_timer)
+force_close_key = (
+    f"force_closed__{config_key}__{st.session_state.challenge_start_idx}__"
+    f"{st.session_state.challenge_end_idx}__{battle_question_no if mode == '對戰模式' else 'NA'}"
+)
+if stage_force_close_triggered:
+    force_reason = "系統強制平倉：時間到" if stage_finished_by_timer else "系統強制平倉：最後一根 K 線"
+    force_close_once_at_end(current_row, force_close_key, force_reason)
+
+    # 強制平倉後立即重新計算帳戶數據，避免 K 線左上角與最終成績顯示舊資料。
+    unrealized_pnl = calc_unrealized_pnl(current_price)
+    total_equity = calc_total_equity(current_price)
+    short_maintenance_rate = calc_short_maintenance_rate(current_price)
+    max_new_short_lots = calc_max_new_short_lots(current_price)
+    return_pct = (total_equity - initial_cash) / initial_cash * 100.0
 
 stock_name = "" if blind_mode else get_stock_name(actual_loaded_ticker)
 if mode == "對戰模式":
@@ -3312,8 +3358,12 @@ battle_submitted_scores = get_player_battle_scores(battle_room_code, battle_play
 battle_current_question_submitted = str(battle_question_no) in battle_submitted_scores if mode == "對戰模式" else False
 battle_player_completed_all = len(battle_submitted_scores) >= battle_question_count if mode == "對戰模式" else False
 allow_back_actions = mode != "對戰模式"
-allow_forward_actions = not (mode == "對戰模式" and (battle_time_up or battle_current_question_submitted or battle_player_completed_all or battle_game_over))
-trade_actions_disabled = mode == "對戰模式" and (battle_time_up or battle_current_question_submitted or battle_player_completed_all or battle_game_over)
+allow_forward_actions = not stage_force_close_triggered and not (
+    mode == "對戰模式" and (battle_time_up or battle_current_question_submitted or battle_player_completed_all or battle_game_over)
+)
+trade_actions_disabled = stage_force_close_triggered or (
+    mode == "對戰模式" and (battle_time_up or battle_current_question_submitted or battle_player_completed_all or battle_game_over)
+)
 
 # =========================================================
 # 10. Replay Control
@@ -3512,6 +3562,8 @@ st.caption("畫圖工具在 K 線圖上方；選工具後直接點圖。")
 show_stage_result = st.session_state.current_idx >= st.session_state.challenge_end_idx or (mode == "對戰模式" and battle_time_up)
 if show_stage_result:
     st.markdown("### 闖關結果")
+    if st.session_state.get("last_force_close_message", ""):
+        st.info(f"已強制平倉：{st.session_state.last_force_close_message}")
     if mode == "對戰模式" and battle_time_up and st.session_state.current_idx < st.session_state.challenge_end_idx:
         st.error(f"本題時間到。系統已用目前總資產 {total_equity:,.0f} 元自動提交本題成績。")
     elif return_pct >= target_return_pct:
