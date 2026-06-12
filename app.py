@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V30 dark fullscreen chart + sidebar reopen fix
+# Deployment version：V31 dark fullscreen chart + custom sidebar toggle + pseudo fullscreen stable actions
 
 import base64
 import hashlib
@@ -73,6 +73,29 @@ st.markdown(
         color:#e5e7eb !important;
         fill:#e5e7eb !important;
     }
+
+    /* 自訂左上角側邊欄開關，不依賴 Streamlit 內建 header。 */
+    #barreplay-sidebar-toggle {
+        position: fixed;
+        left: 10px;
+        top: 10px;
+        z-index: 2147483646;
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        border: 1px solid #334155;
+        background: #111827;
+        color: #f8fafc;
+        font-size: 20px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 10px 28px rgba(0,0,0,.35);
+        cursor: pointer;
+    }
+    #barreplay-sidebar-toggle:hover { background:#1f2937; border-color:#475569; }
+
     .block-container {
         padding-top: 1.1rem;
         padding-bottom: 2.5rem;
@@ -315,6 +338,78 @@ def install_battle_focus_mode(enabled: bool) -> None:
         height=0,
     )
 
+
+
+def install_sidebar_toggle_button() -> None:
+    """固定在左上角的側邊欄開關。避免側邊欄收起後找不到重新打開按鈕。"""
+    components.html(
+        """
+        <script>
+        (function(){
+            const doc = window.parent.document;
+            if (doc.getElementById('barreplay-sidebar-toggle')) return;
+
+            const btn = doc.createElement('button');
+            btn.id = 'barreplay-sidebar-toggle';
+            btn.type = 'button';
+            btn.title = '開啟 / 收回側邊欄';
+            btn.textContent = '☰';
+            doc.body.appendChild(btn);
+
+            function isVisible(el){
+                if(!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = doc.defaultView.getComputedStyle(el);
+                return r.width > 30 && r.height > 30 && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+            }
+            function findBuiltInButton(open){
+                const selectors = open ? [
+                    'div[data-testid="collapsedControl"] button',
+                    'div[data-testid="stSidebarCollapsedControl"] button',
+                    'button[aria-label="Open sidebar"]',
+                    'button[aria-label="Expand sidebar"]',
+                    'button[title="Open sidebar"]',
+                    'button[title="Expand sidebar"]'
+                ] : [
+                    'button[data-testid="stSidebarCollapseButton"]',
+                    'button[aria-label="Close sidebar"]',
+                    'button[aria-label="Collapse sidebar"]',
+                    'button[title="Close sidebar"]',
+                    'button[title="Collapse sidebar"]'
+                ];
+                for(const sel of selectors){
+                    const el = doc.querySelector(sel);
+                    if(isVisible(el)) return el;
+                }
+                const buttons = Array.from(doc.querySelectorAll('button')).filter(b => b.id !== 'barreplay-sidebar-toggle');
+                const patterns = open ? [/open sidebar/i,/expand sidebar/i,/show sidebar/i,/側邊/i,/邊欄/i/] : [/close sidebar/i,/collapse sidebar/i,/hide sidebar/i,/側邊/i,/邊欄/i/];
+                for(const b of buttons){
+                    const label = [b.innerText, b.getAttribute('aria-label'), b.title].filter(Boolean).join(' ');
+                    if(isVisible(b) && patterns.some(re => re.test(label))) return b;
+                }
+                return null;
+            }
+            function sidebarIsOpen(){
+                const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                return isVisible(sidebar) && sidebar.getBoundingClientRect().width > 120;
+            }
+            btn.addEventListener('click', function(){
+                const open = !sidebarIsOpen();
+                const builtIn = findBuiltInButton(open);
+                if(builtIn){ builtIn.click(); return; }
+
+                // 後備方案：至少切換側邊欄 DOM 顯示，不讓使用者完全卡住。
+                const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                if(sidebar){
+                    sidebar.style.display = open ? 'block' : 'none';
+                    sidebar.style.visibility = open ? 'visible' : 'hidden';
+                }
+            });
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 def init_session_state() -> None:
     core_defaults = {
@@ -1529,6 +1624,7 @@ def install_keyboard_shortcuts() -> None:
 
 
 install_keyboard_shortcuts()
+install_sidebar_toggle_button()
 
 # =========================================================
 # 3. Data Loading
@@ -2107,7 +2203,7 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 .action-btn{background:#263047;border-color:#44506a;}
 .trade-btn{background:#2b263a;border-color:#5c4a82;}
 #status{margin-left:8px;font-size:13px;color:#9aa4b2;white-space:nowrap;flex:0 0 auto;}
-#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}#battleOverlay{position:absolute;left:12px;top:12px;z-index:25;display:__OVERLAY_DISPLAY__;min-width:320px;max-width:455px;background:rgba(8,12,20,.86);backdrop-filter:blur(8px);border:1px solid rgba(148,163,184,.28);border-radius:14px;padding:12px 14px;color:#f8fafc;font-size:13px;line-height:1.58;box-shadow:0 14px 36px rgba(0,0,0,.38);pointer-events:none;}#battleOverlay .big{font-size:24px;font-weight:900;letter-spacing:.02em;}#battleOverlay .muted{color:#cbd5e1;}#battleOverlay .good{color:#ff6b6b;}#battleOverlay .bad{color:#26c6da;}#battleOverlay .money{font-weight:850;color:#f8fafc;}#battleOverlay .overlay-title{font-weight:900;font-size:14px;color:#f8fafc;margin-bottom:3px;}#battleOverlay .overlay-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:12px;row-gap:1px;}#battleOverlay .overlay-progress{height:7px;background:rgba(148,163,184,.20);border-radius:99px;margin:7px 0 8px;overflow:hidden;}#battleOverlay .overlay-progress span{display:block;height:100%;background:#2563eb;border-radius:99px;}#wrap:fullscreen{width:100vw!important;height:100vh!important;border:0;background:#0f131a;}#wrap:fullscreen #toolbar{height:78px;}#wrap:fullscreen #chartBox{height:calc(100vh - 78px - __FS_MACD_HEIGHT__px)!important;}#wrap:fullscreen #macdBox{height:__FS_MACD_HEIGHT__px!important;}#wrap.pseudo-fullscreen{width:100vw!important;height:100vh!important;border:0;background:#0f131a;}#wrap.pseudo-fullscreen #toolbar{height:78px;}#wrap.pseudo-fullscreen #chartBox{height:calc(100vh - 78px - __FS_MACD_HEIGHT__px)!important;}#wrap.pseudo-fullscreen #macdBox{height:__FS_MACD_HEIGHT__px!important;}.fullscreen-btn{background:#1d4ed8!important;border-color:#2563eb!important;color:#fff!important;}
+#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}#battleOverlay{position:absolute;left:12px;top:12px;z-index:25;display:__OVERLAY_DISPLAY__;min-width:320px;max-width:455px;background:rgba(8,12,20,.86);backdrop-filter:blur(8px);border:1px solid rgba(148,163,184,.28);border-radius:14px;padding:12px 14px;color:#f8fafc;font-size:13px;line-height:1.58;box-shadow:0 14px 36px rgba(0,0,0,.38);pointer-events:none;}#battleOverlay .big{font-size:24px;font-weight:900;letter-spacing:.02em;}#battleOverlay .muted{color:#cbd5e1;}#battleOverlay .good{color:#ff6b6b;}#battleOverlay .bad{color:#26c6da;}#battleOverlay .money{font-weight:850;color:#f8fafc;}#battleOverlay .overlay-title{font-weight:900;font-size:14px;color:#f8fafc;margin-bottom:3px;}#battleOverlay .overlay-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:12px;row-gap:1px;}#battleOverlay .overlay-progress{height:7px;background:rgba(148,163,184,.20);border-radius:99px;margin:7px 0 8px;overflow:hidden;}#battleOverlay .overlay-progress span{display:block;height:100%;background:#2563eb;border-radius:99px;}#wrap.pseudo-fullscreen{width:100vw!important;height:100vh!important;border:0;background:#0f131a;}#wrap.pseudo-fullscreen #toolbar{height:78px;}#wrap.pseudo-fullscreen #chartBox{height:calc(100vh - 78px - __FS_MACD_HEIGHT__px)!important;}#wrap.pseudo-fullscreen #macdBox{height:__FS_MACD_HEIGHT__px!important;}.fullscreen-btn{background:#1d4ed8!important;border-color:#2563eb!important;color:#fff!important;}
 #macdBox{position:relative;width:100%;height:__MACD_CHART_HEIGHT__px;display:__MACD_DISPLAY__;border-top:1px solid rgba(255,255,255,0.08);}#macdChart{position:absolute;inset:0;}
 </style>
 </head>
@@ -2123,10 +2219,12 @@ const candleData=__CANDLES__;const volumeData=__VOLUMES__;const indicatorPayload
 const wrap=document.getElementById("wrap");const chartBox=document.getElementById("chartBox");const canvas=document.getElementById("drawCanvas");const ctx=canvas.getContext("2d");const statusEl=document.getElementById("status");
 const timeLabelMap={};candleData.forEach(d=>{timeLabelMap[d.time]=d.label;});
 const fullscreenBtn=document.getElementById("fullscreenBtn");
+const fullscreenStateKey=viewKey+"_pseudo_fullscreen";
 let pseudoFullscreen=false;
 function resizeAfterFullscreen(){setTimeout(()=>{try{resizeChart();drawAll();}catch(e){}},80);setTimeout(()=>{try{resizeChart();drawAll();}catch(e){}},280);}
 function setPseudoFullscreen(on){
     pseudoFullscreen=!!on;
+    try{if(on){localStorage.setItem(fullscreenStateKey,"1");}else{localStorage.removeItem(fullscreenStateKey);}}catch(e){}
     try{
         const frame=window.frameElement;
         const pdoc=window.parent.document;
@@ -2146,15 +2244,9 @@ function setPseudoFullscreen(on){
     if(fullscreenBtn)fullscreenBtn.textContent=on?"離開全螢幕":"全螢幕";
     resizeAfterFullscreen();
 }
-if(fullscreenBtn){fullscreenBtn.addEventListener("click",async()=>{
-    if(pseudoFullscreen){setPseudoFullscreen(false);return;}
-    try{
-        if(!document.fullscreenElement && wrap.requestFullscreen){await wrap.requestFullscreen();}
-        else if(document.fullscreenElement){await document.exitFullscreen();}
-        else{setPseudoFullscreen(true);}
-    }catch(e){setPseudoFullscreen(true);}resizeAfterFullscreen();
+if(fullscreenBtn){fullscreenBtn.addEventListener("click",()=>{
+    setPseudoFullscreen(!pseudoFullscreen);
 });}
-document.addEventListener("fullscreenchange",()=>{if(fullscreenBtn)fullscreenBtn.textContent=document.fullscreenElement?"離開全螢幕":"全螢幕";resizeAfterFullscreen();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&pseudoFullscreen){setPseudoFullscreen(false);}},true);
 if(!allowBackActions){
     document.querySelectorAll('.back-btn').forEach(btn=>{
@@ -2200,7 +2292,7 @@ document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLower
 window.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
 function updateBattleTimerText(){const el=document.getElementById("battleTimerText");if(!el)return;const deadline=Number(el.dataset.deadlineMs||"0");if(!deadline)return;const left=Math.max(0,Math.floor((deadline-Date.now())/1000));const m=String(Math.floor(left/60)).padStart(2,"0");const s=String(left%60).padStart(2,"0");el.textContent=(left<=0)?"00:00":`${m}:${s}`;if(left<=10){el.style.color="#ff5252";}}
 setInterval(updateBattleTimerText,1000);updateBattleTimerText();
-chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);if(focusMode){setTimeout(()=>{try{window.frameElement.scrollIntoView({behavior:"smooth",block:"start"});}catch(e){}},250);}drawAll();
+chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{drawAll();saveViewRange();});chart.subscribeCrosshairMove(()=>drawAll());setInterval(drawAll,400);setTool("cursor");setTimeout(applySavedViewRange,0);setTimeout(applySavedViewRange,80);setTimeout(applySavedViewRange,250);try{if(localStorage.getItem(fullscreenStateKey)==="1"){setTimeout(()=>setPseudoFullscreen(true),60);}}catch(e){}if(focusMode){setTimeout(()=>{try{window.frameElement.scrollIntoView({behavior:"smooth",block:"start"});}catch(e){}},250);}drawAll();
 </script>
 </body>
 </html>
@@ -2261,7 +2353,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("設定")
-    st.caption("版本：V30-sidebar-reopen-fix")
+    st.caption("版本：V31-sidebar-fullscreen-actions")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2857,11 +2949,11 @@ if short_maintenance_rate is not None:
         st.warning("融券維持率低於 166%，接近追繳風險區。")
 
 st.markdown("#### 下單")
-t1, t2, t3, t4, t5, t6, t7 = st.columns([2, 1, 1, 1, 1, 1, 1])
-trade_note = t1.text_input("買賣原因", placeholder="例：突破箱頂買入 / 跌破支撐停損 / 壓力不過放空 / 空單回補")
-lot_count = t2.number_input("交易張數", min_value=1, max_value=100, value=1, step=1)
+trade_note = ""
+t1, t2, t3, t4, t5, t6 = st.columns([1.1, 1, 1, 1, 1, 1])
+lot_count = t1.number_input("交易張數", min_value=1, max_value=100, value=1, step=1)
 
-with t3:
+with t2:
     if st.button("買入", type="primary", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = buy_shares(current_row, lot_count, trade_note)
         if ok:
@@ -2870,7 +2962,7 @@ with t3:
             st.error(msg)
         st.rerun()
 
-with t4:
+with t3:
     if st.button("賣出", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = sell_shares(current_row, lot_count, trade_note)
         if ok:
@@ -2879,7 +2971,7 @@ with t4:
             st.error(msg)
         st.rerun()
 
-with t5:
+with t4:
     if st.button("放空", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = short_shares(current_row, lot_count, trade_note)
         if ok:
@@ -2888,7 +2980,7 @@ with t5:
             st.error(msg)
         st.rerun()
 
-with t6:
+with t5:
     if st.button("回補", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = cover_shares(current_row, lot_count, trade_note)
         if ok:
@@ -2897,7 +2989,7 @@ with t6:
             st.error(msg)
         st.rerun()
 
-with t7:
+with t6:
     if st.button("平倉", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = close_all(current_row, trade_note)
         if ok:
