@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V34 settings dialog minimal chart focus
+# Deployment version：V35 infinite trendline
 
 import base64
 import hashlib
@@ -51,7 +51,7 @@ st.markdown(
         color:#e5e7eb !important;
     }
     #MainMenu, footer {visibility: hidden;}
-    /* V34：使用頁面內設定按鈕與彈窗，不再使用自訂側邊欄切換。 */
+    /* V35：設定彈窗 + 趨勢線無限延伸。 */
     header[data-testid="stHeader"] {
         display:none !important;
         height:0 !important;
@@ -1690,7 +1690,7 @@ def install_keyboard_shortcuts() -> None:
 
 
 install_keyboard_shortcuts()
-# V34：不再使用側邊欄切換按鈕，改用設定彈窗。
+# V35：不使用側邊欄，設定集中於彈窗；趨勢線改為雙向無限延伸。
 # install_sidebar_toggle_button()
 
 # =========================================================
@@ -2277,7 +2277,7 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 <body>
 <div id="wrap">
 <div id="toolbar">
-<button class="tool-btn active" data-tool="cursor">游標</button><button class="tool-btn fullscreen-btn" id="fullscreenBtn">全螢幕</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">-10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">上一根</button><button class="tool-btn action-btn" data-action="下一根">下一根</button><button class="tool-btn action-btn" data-action="+10">+10</button><button class="tool-btn action-btn" data-action="下一關">下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入">買</button><button class="tool-btn trade-btn" data-action="賣出">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補">補</button><button class="tool-btn trade-btn" data-action="平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
+<button class="tool-btn active" data-tool="cursor">游標</button><button class="tool-btn fullscreen-btn" id="fullscreenBtn">全螢幕</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">-10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">上一根</button><button class="tool-btn action-btn" data-action="下一根">下一根</button><button class="tool-btn action-btn" data-action="+10">+10</button><button class="tool-btn action-btn" data-action="下一關">下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入">買</button><button class="tool-btn trade-btn" data-action="賣出">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補">補</button><button class="tool-btn trade-btn" data-action="平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">延伸趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
 </div>
 <div id="chartBox"><div id="mainChart"></div><div id="battleOverlay">__OVERLAY_HTML__</div><canvas id="drawCanvas"></canvas></div><div id="macdBox"><div id="macdChart"></div></div>
 </div>
@@ -2358,23 +2358,37 @@ let macdChart=null;let syncingRange=false;if(showMacd){macdChart=LightweightChar
 const histSeries=macdChart.addHistogramSeries({priceFormat:{type:"price",precision:2,minMove:0.01},priceLineVisible:false,lastValueVisible:false,title:""});histSeries.setData(macdPayload.hist);const zeroSeries=macdChart.addLineSeries({color:"rgba(255,255,255,0.35)",lineWidth:1,priceLineVisible:false,lastValueVisible:false,title:""});zeroSeries.setData(macdPayload.zero);const difSeries=macdChart.addLineSeries({color:"#ffca28",lineWidth:2,title:"",priceLineVisible:false,lastValueVisible:false});difSeries.setData(macdPayload.dif);const deaSeries=macdChart.addLineSeries({color:"#42a5f5",lineWidth:2,title:"",priceLineVisible:false,lastValueVisible:false});deaSeries.setData(macdPayload.dea);chart.timeScale().subscribeVisibleLogicalRangeChange(range=>{if(!range||syncingRange||!macdChart)return;syncingRange=true;macdChart.timeScale().setVisibleLogicalRange(range);syncingRange=false;});macdChart.timeScale().subscribeVisibleLogicalRangeChange(range=>{if(!range||syncingRange)return;syncingRange=true;chart.timeScale().setVisibleLogicalRange(range);syncingRange=false;});}
 function resizeChart(){const w=chartBox.clientWidth;const h=chartBox.clientHeight;chart.applyOptions({width:w,height:h});canvas.width=w;canvas.height=h;if(showMacd&&macdChart){const macdBox=document.getElementById("macdBox");macdChart.applyOptions({width:macdBox.clientWidth,height:macdBox.clientHeight});}drawAll();}new ResizeObserver(resizeChart).observe(chartBox);resizeChart();
 function saveDrawings(){localStorage.setItem(drawingsKey,JSON.stringify(drawings));drawAll();}
-function setTool(newTool){tool=newTool;firstPoint=null;document.querySelectorAll(".tool-btn[data-tool]").forEach(btn=>{btn.classList.toggle("active",btn.dataset.tool===tool);});if(tool==="cursor"){canvas.style.pointerEvents="none";statusEl.innerText="模式：游標，可拖曳縮放圖表";}else{canvas.style.pointerEvents="auto";statusEl.innerText="模式："+({trend:"趨勢線，點第一下起點，第二下終點",hline:"水平線，點一下價格位置",vline:"垂直線，點一下時間位置",rect:"矩形，點第一下左上/左下，第二下右下/右上",fib:"斐波那契，點第一下高/低點，第二下低/高點",text:"文字，點一下要標註的位置",delete:"刪除，點擊線段或物件"}[tool]||tool);}}
+function setTool(newTool){tool=newTool;firstPoint=null;document.querySelectorAll(".tool-btn[data-tool]").forEach(btn=>{btn.classList.toggle("active",btn.dataset.tool===tool);});if(tool==="cursor"){canvas.style.pointerEvents="none";statusEl.innerText="模式：游標，可拖曳縮放圖表";}else{canvas.style.pointerEvents="auto";statusEl.innerText="模式："+({trend:"延伸趨勢線，點第一下起點，第二下方向點",hline:"水平線，點一下價格位置",vline:"垂直線，點一下時間位置",rect:"矩形，點第一下左上/左下，第二下右下/右上",fib:"斐波那契，點第一下高/低點，第二下低/高點",text:"文字，點一下要標註的位置",delete:"刪除，點擊線段或物件"}[tool]||tool);}}
 document.querySelectorAll(".tool-btn[data-tool]").forEach(btn=>btn.addEventListener("click",()=>setTool(btn.dataset.tool)));
 document.getElementById("clearAll").addEventListener("click",()=>{if(confirm("確定清除所有畫線？")){drawings=[];saveDrawings();}});
 document.getElementById("exportDrawings").addEventListener("click",()=>{const text=JSON.stringify(drawings,null,2);const blob=new Blob([text],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="tv_drawings.json";a.click();URL.revokeObjectURL(url);});
 document.getElementById("importDrawings").addEventListener("click",()=>{const text=prompt("請貼上畫線 JSON：");if(!text)return;try{const imported=JSON.parse(text);if(!Array.isArray(imported)){alert("JSON 必須是陣列格式。");return;}drawings=imported;saveDrawings();}catch(e){alert("匯入失敗："+e.message);}});
 function getMousePoint(e){const rect=canvas.getBoundingClientRect();const x=e.clientX-rect.left;const y=e.clientY-rect.top;const time=chart.timeScale().coordinateToTime(x);const price=candleSeries.coordinateToPrice(y);if(time===null||price===null||isNaN(price))return null;return{x,y,time,price};}
 function toX(time){return chart.timeScale().timeToCoordinate(time);}function toY(price){return candleSeries.priceToCoordinate(price);}
+function getExtendedLineEndpoints(x1,y1,x2,y2){
+    const dx=x2-x1,dy=y2-y1;
+    if(Math.abs(dx)<0.0001){return{xA:x1,yA:0,xB:x1,yB:canvas.height};}
+    const m=dy/dx;
+    const yAtLeft=y1+m*(0-x1);
+    const yAtRight=y1+m*(canvas.width-x1);
+    return{xA:0,yA:yAtLeft,xB:canvas.width,yB:yAtRight};
+}
+function distanceToInfiniteLine(px,py,x1,y1,x2,y2){
+    const dx=x2-x1,dy=y2-y1;
+    const denom=Math.sqrt(dx*dx+dy*dy);
+    if(denom<0.0001)return Math.sqrt((px-x1)*(px-x1)+(py-y1)*(py-y1));
+    return Math.abs(dy*px-dx*py+x2*y1-y2*x1)/denom;
+}
 function drawAll(){ctx.clearRect(0,0,canvas.width,canvas.height);drawings.forEach(d=>{ctx.save();ctx.lineWidth=d.width||2;ctx.strokeStyle=d.color||"#ffca28";ctx.fillStyle=d.color||"#ffca28";ctx.font="13px Arial";
 if(d.type==="hline"){const y=toY(d.price);if(y===null){ctx.restore();return;}ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();if(d.text)ctx.fillText(d.text,10,y-6);}
 if(d.type==="vline"){const x=toX(d.time);if(x===null){ctx.restore();return;}ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();if(d.text)ctx.fillText(d.text,x+5,18);}
-if(d.type==="trend"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null)){ctx.restore();return;}ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+if(d.type==="trend"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null)){ctx.restore();return;}const ep=getExtendedLineEndpoints(x1,y1,x2,y2);ctx.beginPath();ctx.moveTo(ep.xA,ep.yA);ctx.lineTo(ep.xB,ep.yB);ctx.stroke();}
 if(d.type==="rect"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null)){ctx.restore();return;}const left=Math.min(x1,x2),top=Math.min(y1,y2),w=Math.abs(x2-x1),h=Math.abs(y2-y1);ctx.globalAlpha=0.16;ctx.fillRect(left,top,w,h);ctx.globalAlpha=1;ctx.strokeRect(left,top,w,h);if(d.text)ctx.fillText(d.text,left+5,top+16);}
 if(d.type==="fib"){const x1=toX(d.time1),x2=toX(d.time2);if(x1===null||x2===null){ctx.restore();return;}const left=Math.min(x1,x2),right=Math.max(x1,x2),high=d.high,low=d.low,range=high-low;[{r:0,label:"0"},{r:.236,label:"0.236"},{r:.382,label:"0.382"},{r:.5,label:"0.5"},{r:.618,label:"0.618"},{r:.786,label:"0.786"},{r:1,label:"1"}].forEach(lv=>{const price=high-range*lv.r;const y=toY(price);if(y===null)return;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();ctx.fillText(`${lv.label} ${price.toFixed(2)}`,right+6,y-4);});}
 if(d.type==="text"){const x=toX(d.time),y=toY(d.price);if(x===null||y===null){ctx.restore();return;}ctx.fillText(d.text||"文字",x+5,y-5);ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fill();}ctx.restore();});}
 function distanceToSegment(px,py,x1,y1,x2,y2){const A=px-x1,B=py-y1,C=x2-x1,D=y2-y1;const dot=A*C+B*D,lenSq=C*C+D*D;let param=-1;if(lenSq!==0)param=dot/lenSq;let xx,yy;if(param<0){xx=x1;yy=y1;}else if(param>1){xx=x2;yy=y2;}else{xx=x1+param*C;yy=y1+param*D;}const dx=px-xx,dy=py-yy;return Math.sqrt(dx*dx+dy*dy);}
-function hitTest(px,py){for(let i=drawings.length-1;i>=0;i--){const d=drawings[i];if(d.type==="hline"){const y=toY(d.price);if(y!==null&&Math.abs(py-y)<8)return i;}if(d.type==="vline"){const x=toX(d.time);if(x!==null&&Math.abs(px-x)<8)return i;}if(d.type==="trend"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;if(distanceToSegment(px,py,x1,y1,x2,y2)<8)return i;}if(d.type==="rect"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;const left=Math.min(x1,x2),right=Math.max(x1,x2),top=Math.min(y1,y2),bottom=Math.max(y1,y2);if(px>=left&&px<=right&&py>=top&&py<=bottom)return i;}if(d.type==="fib"){const x1=toX(d.time1),x2=toX(d.time2);if(x1===null||x2===null)continue;const left=Math.min(x1,x2),right=Math.max(x1,x2);if(px<left-10||px>right+10)continue;for(const r of [0,.236,.382,.5,.618,.786,1]){const y=toY(d.high-(d.high-d.low)*r);if(y!==null&&Math.abs(py-y)<8)return i;}}if(d.type==="text"){const x=toX(d.time),y=toY(d.price);if(x!==null&&y!==null&&Math.abs(px-x)<60&&Math.abs(py-y)<20)return i;}}return -1;}
-canvas.addEventListener("click",e=>{const p=getMousePoint(e);if(!p)return;if(tool==="delete"){const idx=hitTest(p.x,p.y);if(idx>=0){drawings.splice(idx,1);saveDrawings();}return;}if(tool==="hline"){drawings.push({type:"hline",price:p.price,color:"#ffca28",width:2,text:"水平線"});saveDrawings();return;}if(tool==="vline"){drawings.push({type:"vline",time:p.time,color:"#64b5f6",width:2,text:"關鍵K"});saveDrawings();return;}if(tool==="text"){const text=prompt("輸入標註文字：","關鍵位置");if(text===null)return;drawings.push({type:"text",time:p.time,price:p.price,color:"#ffca28",text:text});saveDrawings();return;}if(tool==="trend"){if(!firstPoint){firstPoint=p;statusEl.innerText="趨勢線：已設定起點，請點終點";return;}drawings.push({type:"trend",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:""});firstPoint=null;saveDrawings();return;}if(tool==="rect"){if(!firstPoint){firstPoint=p;statusEl.innerText="矩形：已設定第一點，請點第二點";return;}drawings.push({type:"rect",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:"區間"});firstPoint=null;saveDrawings();return;}if(tool==="fib"){if(!firstPoint){firstPoint=p;statusEl.innerText="斐波那契：已設定第一點，請點第二點";return;}drawings.push({type:"fib",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,high:Math.max(firstPoint.price,p.price),low:Math.min(firstPoint.price,p.price),color:"#ffca28",width:1.5,text:"Fib"});firstPoint=null;saveDrawings();return;}});
+function hitTest(px,py){for(let i=drawings.length-1;i>=0;i--){const d=drawings[i];if(d.type==="hline"){const y=toY(d.price);if(y!==null&&Math.abs(py-y)<8)return i;}if(d.type==="vline"){const x=toX(d.time);if(x!==null&&Math.abs(px-x)<8)return i;}if(d.type==="trend"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;if(distanceToInfiniteLine(px,py,x1,y1,x2,y2)<8)return i;}if(d.type==="rect"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;const left=Math.min(x1,x2),right=Math.max(x1,x2),top=Math.min(y1,y2),bottom=Math.max(y1,y2);if(px>=left&&px<=right&&py>=top&&py<=bottom)return i;}if(d.type==="fib"){const x1=toX(d.time1),x2=toX(d.time2);if(x1===null||x2===null)continue;const left=Math.min(x1,x2),right=Math.max(x1,x2);if(px<left-10||px>right+10)continue;for(const r of [0,.236,.382,.5,.618,.786,1]){const y=toY(d.high-(d.high-d.low)*r);if(y!==null&&Math.abs(py-y)<8)return i;}}if(d.type==="text"){const x=toX(d.time),y=toY(d.price);if(x!==null&&y!==null&&Math.abs(px-x)<60&&Math.abs(py-y)<20)return i;}}return -1;}
+canvas.addEventListener("click",e=>{const p=getMousePoint(e);if(!p)return;if(tool==="delete"){const idx=hitTest(p.x,p.y);if(idx>=0){drawings.splice(idx,1);saveDrawings();}return;}if(tool==="hline"){drawings.push({type:"hline",price:p.price,color:"#ffca28",width:2,text:"水平線"});saveDrawings();return;}if(tool==="vline"){drawings.push({type:"vline",time:p.time,color:"#64b5f6",width:2,text:"關鍵K"});saveDrawings();return;}if(tool==="text"){const text=prompt("輸入標註文字：","關鍵位置");if(text===null)return;drawings.push({type:"text",time:p.time,price:p.price,color:"#ffca28",text:text});saveDrawings();return;}if(tool==="trend"){if(!firstPoint){firstPoint=p;statusEl.innerText="延伸趨勢線：已設定起點，請點第二點決定方向";return;}drawings.push({type:"trend",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:"",extend:"both"});firstPoint=null;saveDrawings();return;}if(tool==="rect"){if(!firstPoint){firstPoint=p;statusEl.innerText="矩形：已設定第一點，請點第二點";return;}drawings.push({type:"rect",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:"區間"});firstPoint=null;saveDrawings();return;}if(tool==="fib"){if(!firstPoint){firstPoint=p;statusEl.innerText="斐波那契：已設定第一點，請點第二點";return;}drawings.push({type:"fib",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,high:Math.max(firstPoint.price,p.price),low:Math.min(firstPoint.price,p.price),color:"#ffca28",width:1.5,text:"Fib"});firstPoint=null;saveDrawings();return;}});
 function clickParentButtonByText(keyword){if(!allowBackActions&&isBackAction(keyword)){statusEl.innerText="對戰模式禁止回看，只能往前作答";return;}try{saveViewRange();}catch(e){}try{if(pseudoFullscreen){localStorage.setItem(fullscreenStateKey,"1");}}catch(e){}try{const buttons=Array.from(window.parent.document.querySelectorAll("button"));const target=buttons.find(btn=>btn.innerText&&btn.innerText.includes(keyword));if(target&&!target.disabled){target.click();return;}}catch(e){console.log("Direct parent click failed:",e);}try{window.parent.postMessage({type:"tv_replay_action",keyword:keyword},"*");}catch(e){console.log("postMessage failed:",e);}}
 document.querySelectorAll(".action-btn[data-action], .trade-btn[data-action]").forEach(btn=>btn.addEventListener("click",()=>clickParentButtonByText(btn.dataset.action)));
 document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLowerCase();if(tag==="input"||tag==="textarea"||e.target.isContentEditable)return;if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
@@ -2430,7 +2444,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V34_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V35_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2444,7 +2458,7 @@ if st.session_state.get("pending_stock_code") is not None:
 @st.dialog("設定", width="large")
 def render_settings_dialog() -> None:
     st.header("設定")
-    st.caption("版本：V34-settings-dialog-clean")
+    st.caption("版本：V35-infinite-trendline")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
