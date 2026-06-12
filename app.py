@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V33 robust sidebar toggle default-open
+# Deployment version：V34 settings dialog minimal chart focus
 
 import base64
 import hashlib
@@ -35,11 +35,11 @@ except Exception:
 st.set_page_config(
     page_title="BARREPLAY",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.title("BARREPLAY")
-st.caption("裸 K 復盤｜對戰模式｜深色介面")
+st.caption("裸 K 復盤｜對戰模式｜設定視窗")
 
 # Minimal UI theme: remove visual noise and keep repeated controls compact.
 st.markdown(
@@ -51,7 +51,7 @@ st.markdown(
         color:#e5e7eb !important;
     }
     #MainMenu, footer {visibility: hidden;}
-    /* V33：隱藏 Streamlit 預設黑色 header，改用自訂左上角選單按鈕。 */
+    /* V34：使用頁面內設定按鈕與彈窗，不再使用自訂側邊欄切換。 */
     header[data-testid="stHeader"] {
         display:none !important;
         height:0 !important;
@@ -1690,7 +1690,8 @@ def install_keyboard_shortcuts() -> None:
 
 
 install_keyboard_shortcuts()
-install_sidebar_toggle_button()
+# V34：不再使用側邊欄切換按鈕，改用設定彈窗。
+# install_sidebar_toggle_button()
 
 # =========================================================
 # 3. Data Loading
@@ -2429,19 +2430,21 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V30_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V34_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
-# 7. Sidebar Settings
+# 7. Settings Dialog
 # =========================================================
 if st.session_state.get("pending_stock_code") is not None:
     st.session_state.stock_code = st.session_state.pending_stock_code
     st.session_state.pending_stock_code = None
 
-with st.sidebar:
+
+@st.dialog("設定", width="large")
+def render_settings_dialog() -> None:
     st.header("設定")
-    st.caption("版本：V33-sidebar-toggle-stable")
+    st.caption("版本：V34-settings-dialog-clean")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2673,6 +2676,33 @@ with st.sidebar:
         reset_account(initial_cash)
         st.rerun()
 
+settings_bar_col, title_col = st.columns([0.12, 0.88])
+with settings_bar_col:
+    if st.button("設定", key="open_settings_dialog", use_container_width=True):
+        render_settings_dialog()
+with title_col:
+    st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
+
+# 從 session_state 取得目前設定；設定修改集中在上方彈窗。
+mode = st.session_state.get("setting_mode", DEFAULT_SETTINGS["mode"])
+stock_pool_text = st.session_state.get("setting_stock_pool_text", DEFAULT_SETTINGS["stock_pool_text"])
+stock_pool = parse_stock_codes(stock_pool_text)
+raw_code_input = st.session_state.get("stock_code", DEFAULT_SETTINGS["stock_code"])
+interval_map = {"日線": "1d", "60 分線": "60m", "30 分線": "30m", "15 分線": "15m", "5 分線": "5m"}
+interval_label = st.session_state.get("setting_interval_label", DEFAULT_SETTINGS["interval_label"])
+if interval_label not in interval_map:
+    interval_label = DEFAULT_SETTINGS["interval_label"]
+    st.session_state.setting_interval_label = interval_label
+interval = interval_map[interval_label]
+period = "5y" if interval == "1d" else "60d"
+challenge_bars = int(st.session_state.get("setting_challenge_bars", DEFAULT_SETTINGS["challenge_bars"]))
+target_return_pct = float(st.session_state.get("setting_target_return_pct", DEFAULT_SETTINGS["target_return_pct"]))
+initial_cash = float(st.session_state.get("setting_initial_cash", DEFAULT_SETTINGS["initial_cash"]))
+lookback_bars = int(st.session_state.get("setting_lookback_bars", DEFAULT_SETTINGS["lookback_bars"]))
+blind_mode = bool(st.session_state.get("setting_blind_mode", DEFAULT_SETTINGS["blind_mode"]))
+show_volume = bool(st.session_state.get("setting_show_volume", DEFAULT_SETTINGS["show_volume"]))
+chart_height = int(st.session_state.get("setting_chart_height", DEFAULT_SETTINGS["chart_height"]))
+
 # =========================================================
 # 8. Load / Setup Challenge
 # =========================================================
@@ -2854,76 +2884,49 @@ if mode == "對戰模式":
         st.rerun()
 
 # =========================================================
-# 9. Top Info
+# 9. Minimal Status / Battle Sync
 # =========================================================
-col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-col1.subheader(f"{show_title}")
-col2.metric("目前價格", f"{current_price:.2f}")
-col3.metric("關卡進度", f"{bars_passed} / {bars_total}")
-col4.metric("剩餘 K 數", f"{bars_left}")
-
-g1, g2, g3, g4 = st.columns(4)
-g1.metric("目前報酬率", f"{return_pct:.2f}%", delta=f"{return_pct - target_return_pct:.2f}%")
-g2.metric("過關目標", f"{target_return_pct:.2f}%")
-g3.metric("總資產", f"{total_equity:,.0f}")
-g4.metric("目前時間", show_time)
-st.progress(min(max(bars_passed / max(bars_total, 1), 0), 1))
-
+# 上方重複資訊已移除；價格、帳戶、進度與倒數統一顯示在 K 線圖左上角。
 if mode == "對戰模式":
     install_battle_live_sync(True, seconds=1.0 if not battle_game_over else 5.0)
     install_battle_focus_mode(True)
     chart_height = max(chart_height, 920)
-    st.markdown("### 對戰模式")
-    st.warning("對戰模式禁止回看，只能往前推進。")
+
     players_df = build_battle_room_players_df(battle_room_code)
-    online_count = int((players_df["狀態"] == "在線").sum()) if not players_df.empty and "狀態" in players_df.columns else 0
-    b1, b2, b3, b4, b5, b6 = st.columns(6)
-    b1.metric("房間號碼", battle_room_code)
-    b2.metric("玩家", battle_player_name)
-    b3.metric("目前題目", f"{battle_question_no} / {battle_question_count}", delta=f"第 {battle_round_no} 局")
-    b4.metric("本題期末金額", f"{total_equity:,.0f}")
-    b5.metric("房間人數", f"{len(players_df)} 人", delta=f"在線 {online_count}")
-    b6.metric("倒數時間", "結束" if battle_game_over else (str(battle_time_status["time_text"]) if battle_time_status else "--"))
+    submitted_scores_now = get_player_battle_scores(battle_room_code, battle_player_name)
+    leaderboard_df = build_battle_leaderboard(battle_room_code)
 
-    if battle_game_over:
-        st.success("本房所有關卡時間已結束，系統進入最終結算。")
-    elif battle_time_up:
-        st.error("本題時間到。系統會自動提交當下成績，並等待下一題同步開始。")
-    else:
-        st.info(f"本題限時 {battle_time_limit_minutes} 分鐘，剩餘 {battle_time_status['time_text']}。")
-
-    with st.expander("房間玩家 / 進入狀態", expanded=True):
+    # 房間與排行榜改成摺疊資訊，避免干擾 K 線主畫面。
+    with st.expander("房間與排行榜", expanded=False):
         if not players_df.empty:
+            st.markdown("房間玩家")
             st.dataframe(players_df, use_container_width=True, hide_index=True)
         else:
             st.caption("目前還沒有玩家加入此房間。")
 
-    submitted_scores_now = get_player_battle_scores(battle_room_code, battle_player_name)
-    q_df = pd.DataFrame(
-        [
-            {
-                "題號": item["question_no"],
-                "狀態": "已提交" if str(item["question_no"]) in submitted_scores_now else ("目前" if item["question_no"] == battle_question_no else "待作答"),
-                "股票代號": "盲測中" if blind_mode else item["stock_code"],
-            }
-            for item in battle_questions
-        ]
-    )
-    with st.expander(f"查看本房 {battle_question_count} 題清單"):
+        q_df = pd.DataFrame(
+            [
+                {
+                    "題號": item["question_no"],
+                    "狀態": "已提交" if str(item["question_no"]) in submitted_scores_now else ("目前" if item["question_no"] == battle_question_no else "待作答"),
+                    "股票代號": "盲測中" if blind_mode else item["stock_code"],
+                }
+                for item in battle_questions
+            ]
+        )
+        st.markdown("題目狀態")
         st.dataframe(q_df, use_container_width=True, hide_index=True)
 
-    leaderboard_df = build_battle_leaderboard(battle_room_code)
-    if not leaderboard_df.empty:
-        st.markdown("#### 排行榜")
-        st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
-    else:
-        st.caption("目前房間還沒有玩家提交成績。完成每題或時間到後按「提交本題成績」即可上榜。")
+        if not leaderboard_df.empty:
+            st.markdown("排行榜")
+            st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("目前房間還沒有玩家提交成績。")
 
     winner_info = get_battle_winner_summary(battle_room_code)
     if winner_info.get("has_winner"):
         if battle_game_over or winner_info.get("all_finished"):
             render_battle_result_modal(winner_info, leaderboard_df, battle_room_code, battle_round_no, can_rematch=bool(st.session_state.get("battle_room_owner", False)), player_name=battle_player_name)
-            st.success("對戰結束。" + winner_info.get("message", ""))
             balloon_key = f"battle_winner_balloons_{battle_room_code}_{battle_round_no}"
             if not st.session_state.get(balloon_key, False):
                 st.balloons()
@@ -2938,28 +2941,21 @@ if mode == "對戰模式":
                         reset_account(initial_cash)
                     st.session_state.battle_room_notice = msg
                     st.rerun()
-        else:
-            st.info("目前戰況：" + winner_info.get("message", ""))
 
 # =========================================================
-# 9.5 Indicator Checkboxes
+# 9.5 Indicator State
 # =========================================================
-st.markdown("#### 指標")
-st.caption("勾選要顯示的指標。")
-
-indicator_cols = st.columns(8)
-for idx, indicator in enumerate(INDICATOR_OPTIONS):
-    with indicator_cols[idx]:
-        st.checkbox(indicator, key=f"setting_indicator_{indicator}")
-
-show_macd = st.checkbox("顯示 MACD", key="setting_show_macd")
 selected_indicators = [
     name for name in INDICATOR_OPTIONS
     if st.session_state.get(f"setting_indicator_{name}", False)
 ]
+show_macd = bool(st.session_state.get("setting_show_macd", DEFAULT_SETTINGS["show_macd"]))
 
 # 保險備份：即使某次 rerun 有 widget 沒渲染，也可用上一輪指標設定復原。
-st.session_state.persisted_selected_indicators = selected_indicators.copy()
+if selected_indicators:
+    st.session_state.persisted_selected_indicators = selected_indicators.copy()
+else:
+    selected_indicators = st.session_state.get("persisted_selected_indicators", DEFAULT_SETTINGS["selected_indicators"])
 st.session_state.persisted_show_macd = bool(show_macd)
 
 settings_now = collect_current_settings()
