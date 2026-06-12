@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V27 result modal buttons + rematch
+# Deployment version：V28 minimal UI
 
 import base64
 import hashlib
@@ -33,13 +33,49 @@ except Exception:
 # 0. App Config
 # =========================================================
 st.set_page_config(
-    page_title="BARREPLAY 裸K闖關復盤",
+    page_title="BARREPLAY",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("🎮 BARREPLAY 裸 K TradingView 風格闖關復盤")
-st.caption("V27：成績 / 獲勝彈窗新增確認與再來一局按鈕；確認可關閉彈窗，房主可直接在彈窗內開新局。")
+st.title("BARREPLAY")
+st.caption("裸 K 復盤｜對戰模式｜簡約介面")
+
+# Minimal UI theme: remove visual noise and keep repeated controls compact.
+st.markdown(
+    """
+    <style>
+    #MainMenu, footer, header {visibility: hidden;}
+    .block-container {padding-top: 1.2rem; padding-bottom: 2.5rem; max-width: 100%;}
+    h1 {font-size: 2.0rem !important; letter-spacing: .02em; font-weight: 850 !important; margin-bottom: .2rem !important;}
+    h2, h3, h4 {font-weight: 800 !important; letter-spacing: .01em;}
+    [data-testid="stCaptionContainer"] {color:#64748b;}
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: .75rem .85rem;
+        box-shadow: 0 1px 2px rgba(15,23,42,.04);
+    }
+    div[data-testid="stMetricLabel"] {font-size:.82rem; color:#64748b;}
+    div[data-testid="stMetricValue"] {font-size:1.35rem; font-weight:800; color:#111827;}
+    section[data-testid="stSidebar"] {background:#f8fafc; border-right:1px solid #e5e7eb;}
+    .stButton > button {
+        border-radius: 10px !important;
+        border: 1px solid #d1d5db !important;
+        box-shadow: none !important;
+        font-weight: 700 !important;
+    }
+    .stButton > button[kind="primary"], .stButton > button[data-testid="baseButton-primary"] {
+        background:#2563eb !important;
+        border-color:#2563eb !important;
+    }
+    hr {margin:.75rem 0 1rem 0;}
+    .barreplay-section-note {font-size:.9rem; color:#64748b; margin-top:-.3rem; margin-bottom:.6rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.markdown("---")
 
 # =========================================================
@@ -967,11 +1003,11 @@ def get_battle_winner_summary(room_code: str) -> dict[str, Any]:
         second = str(completed_df.iloc[1]["玩家"])
         second_amount = float(completed_df.iloc[1]["總金額"])
         margin = winner_amount - second_amount
-        message = f"🏆 {winner} 獲勝，總金額 {winner_amount:,.0f} 元，獲利 {winner_profit:+,.0f} 元，贏第二名 {second} {margin:,.0f} 元。"
+        message = f"{winner} 獲勝，總金額 {winner_amount:,.0f} 元，獲利 {winner_profit:+,.0f} 元，贏第二名 {second} {margin:,.0f} 元。"
     else:
         second = ""
         margin = 0.0
-        message = f"🏆 {winner} 暫時領先，總金額 {winner_amount:,.0f} 元，獲利 {winner_profit:+,.0f} 元。"
+        message = f"{winner} 暫時領先，總金額 {winner_amount:,.0f} 元，獲利 {winner_profit:+,.0f} 元。"
 
     finished_players = 0
     for pdata in players.values():
@@ -1004,7 +1040,7 @@ def render_battle_winner_banner(winner_info: dict[str, Any], room_code: str, rou
         f"""
         <div class="battle-winner-banner">
             <div class="battle-winner-room">房間 {room_code}｜第 {round_no} 局結束</div>
-            <div class="battle-winner-title">🏆 {winner} 獲勝！</div>
+            <div class="battle-winner-title">{winner} 獲勝</div>
             <div class="battle-winner-profit {profit_class}">獲利 {profit:+,.0f} 元</div>
             <div class="battle-winner-sub">總金額 {amount:,.0f} 元｜贏第二名 {margin:,.0f} 元</div>
         </div>
@@ -1041,8 +1077,8 @@ def render_battle_result_modal(
     """成績 / 獲勝彈窗。
 
     V27：改用 st.dialog 顯示真正可互動的按鈕：
-    - ✅ 確認：只關閉本局結果彈窗。
-    - 🔁 再來一局：只有房主可按，會保留玩家並重開新局。
+    - 確認：只關閉本局結果彈窗。
+    - 再來一局：只有房主可按，會保留玩家並重開新局。
 
     若部署環境的 Streamlit 沒有 st.dialog，則退回頁面內大卡片顯示。
     """
@@ -1112,7 +1148,7 @@ def render_battle_result_modal(
             </style>
             <div class="battle-result-dialog-card">
                 <div class="battle-result-dialog-kicker">房間 {escape(str(room_code))}｜第 {int(round_no)} 局最終成績</div>
-                <div class="battle-result-dialog-title">🏆 {escape(winner)} 獲勝！</div>
+                <div class="battle-result-dialog-title">{escape(winner)} 獲勝</div>
                 <div class="battle-result-dialog-profit {profit_class}">獲利 {profit:+,.0f} 元</div>
                 <div class="battle-result-dialog-sub">總金額 {amount:,.0f} 元｜{margin_text}</div>
             </div>
@@ -1121,18 +1157,18 @@ def render_battle_result_modal(
         )
 
         if not result_df.empty:
-            st.markdown("#### 📊 房間成績排行")
+            st.markdown("#### 房間成績排行")
             st.dataframe(result_df, use_container_width=True, hide_index=True)
 
         btn_confirm, btn_rematch = st.columns(2)
         with btn_confirm:
-            if st.button("✅ 確認，關閉彈窗", use_container_width=True, key=f"confirm_result_modal_{room_code}_{round_no}"):
+            if st.button("確認，關閉彈窗", use_container_width=True, key=f"confirm_result_modal_{room_code}_{round_no}"):
                 st.session_state[modal_key] = True
                 st.rerun()
 
         with btn_rematch:
             if can_rematch:
-                if st.button("🔁 再來一局", type="primary", use_container_width=True, key=f"rematch_result_modal_{room_code}_{round_no}"):
+                if st.button("再來一局", type="primary", use_container_width=True, key=f"rematch_result_modal_{room_code}_{round_no}"):
                     ok, msg = reset_battle_room_for_rematch(room_code, player_name)
                     if ok:
                         st.session_state[modal_key] = True
@@ -1143,11 +1179,11 @@ def render_battle_result_modal(
                     st.session_state.battle_room_notice = msg
                     st.rerun()
             else:
-                st.button("🔁 再來一局（房主）", use_container_width=True, disabled=True, key=f"rematch_result_modal_disabled_{room_code}_{round_no}")
+                st.button("再來一局（房主）", use_container_width=True, disabled=True, key=f"rematch_result_modal_disabled_{room_code}_{round_no}")
                 st.caption("只有房主可以開新局。")
 
     if hasattr(st, "dialog"):
-        @st.dialog("🏆 對戰結果", width="large")
+        @st.dialog("對戰結果", width="large")
         def _battle_result_dialog() -> None:
             _modal_body()
 
@@ -2002,8 +2038,8 @@ TV_HTML = r'''
 html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;font-family:Arial,"Microsoft JhengHei",sans-serif;}
 #wrap{width:100%;height:__HEIGHT__px;background:#0f131a;border:1px solid rgba(255,255,255,0.08);box-sizing:border-box;}
 #toolbar{height:76px;display:flex;align-items:center;align-content:center;gap:5px;padding:5px 8px;box-sizing:border-box;background:#151a23;border-bottom:1px solid rgba(255,255,255,0.08);user-select:none;overflow-x:visible;white-space:normal;flex-wrap:wrap;}
-.tool-btn{height:30px;padding:0 8px;background:#202736;color:#d1d4dc;border:1px solid #343b4a;border-radius:6px;cursor:pointer;font-size:13px;white-space:nowrap;flex:0 0 auto;}
-.tool-btn:hover{background:#2d3547;}.tool-btn.active{background:#2962ff;border-color:#2962ff;color:white;}
+.tool-btn{height:28px;padding:0 8px;background:#151b26;color:#cbd5e1;border:1px solid #334155;border-radius:7px;cursor:pointer;font-size:12px;white-space:nowrap;flex:0 0 auto;}
+.tool-btn:hover{background:#1f2937;}.tool-btn.active{background:#2563eb;border-color:#2563eb;color:white;}
 .tool-btn.disabled{opacity:.38;cursor:not-allowed;background:#1b202b;border-color:#2a3040;color:#6f7786;}
 .tool-btn.disabled:hover{background:#1b202b;}
 .toolbar-sep{height:24px;width:1px;background:rgba(255,255,255,0.18);margin:0 4px;flex:0 0 auto;}
@@ -2017,7 +2053,7 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 <body>
 <div id="wrap">
 <div id="toolbar">
-<button class="tool-btn active" data-tool="cursor">游標</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">⏮ -10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">⬅ 上一根</button><button class="tool-btn action-btn" data-action="下一根">➡ 下一根</button><button class="tool-btn action-btn" data-action="+10">⏭ +10</button><button class="tool-btn action-btn" data-action="下一關">🎲 下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入做多">買</button><button class="tool-btn trade-btn" data-action="賣出多單">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補空單">補</button><button class="tool-btn trade-btn" data-action="全部平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
+<button class="tool-btn active" data-tool="cursor">游標</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">-10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">上一根</button><button class="tool-btn action-btn" data-action="下一根">下一根</button><button class="tool-btn action-btn" data-action="+10">+10</button><button class="tool-btn action-btn" data-action="下一關">下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入做多">買</button><button class="tool-btn trade-btn" data-action="賣出多單">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補空單">補</button><button class="tool-btn trade-btn" data-action="全部平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
 </div>
 <div id="chartBox"><div id="mainChart"></div><div id="battleOverlay">__OVERLAY_HTML__</div><canvas id="drawCanvas"></canvas></div><div id="macdBox"><div id="macdChart"></div></div>
 </div>
@@ -2128,8 +2164,8 @@ if st.session_state.get("pending_stock_code") is not None:
     st.session_state.pending_stock_code = None
 
 with st.sidebar:
-    st.header("⚙️ 闖關設定")
-    st.caption("目前版本：V27-result-modal-buttons（彈窗確認 / 再來一局 / K 線左上角帳戶同步）")
+    st.header("設定")
+    st.caption("版本：V28-minimal-ui")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2138,7 +2174,7 @@ with st.sidebar:
 
     if mode == "對戰模式":
         st.markdown("---")
-        st.subheader("🏁 對戰房間")
+        st.subheader("對戰房間")
         st.text_input("房間號碼", key="battle_room_code", help="先輸入房號，再按建立或加入。同一房間會使用同一組題目。")
         st.text_input("玩家名稱（必填）", key="battle_player_name", placeholder="請輸入你的名字，例如：Yao")
 
@@ -2185,7 +2221,7 @@ with st.sidebar:
 
         room_col1, room_col2 = st.columns(2)
         with room_col1:
-            if st.button("➕ 建立房間", use_container_width=True, disabled=not valid_player_name):
+            if st.button("建立房間", use_container_width=True, disabled=not valid_player_name):
                 ok, msg = create_battle_room(
                     requested_room_code,
                     requested_player_name,
@@ -2207,7 +2243,7 @@ with st.sidebar:
                 # 避免下一輪被 refresh-cleanup 誤判為重新整理而踢出。
 
         with room_col2:
-            if st.button("🚪 加入房間", use_container_width=True, disabled=not valid_player_name):
+            if st.button("加入房間", use_container_width=True, disabled=not valid_player_name):
                 ok, msg = join_battle_room(
                     requested_room_code,
                     requested_player_name,
@@ -2244,7 +2280,7 @@ with st.sidebar:
         if room_joined_now and room_owner_now and room_waiting_now:
             set_col, start_col = st.columns(2)
             with set_col:
-                if st.button("💾 儲存房間設定", use_container_width=True):
+                if st.button("儲存房間設定", use_container_width=True):
                     ok, msg = update_battle_room_settings(
                         requested_room_code,
                         requested_player_name,
@@ -2258,7 +2294,7 @@ with st.sidebar:
                     st.session_state.battle_room_notice = msg
                     st.rerun()
             with start_col:
-                if st.button("▶️ 開始對戰", type="primary", use_container_width=True):
+                if st.button("開始對戰", type="primary", use_container_width=True):
                     # 開始前自動保存房主當前設定。
                     update_battle_room_settings(
                         requested_room_code,
@@ -2284,7 +2320,7 @@ with st.sidebar:
             latest_room_status = get_battle_room_meta(requested_room_code)
             latest_time_status = get_global_battle_time_status(latest_room_status) if latest_room_status else {}
             if room_owner_now and bool(latest_time_status.get("game_over", False)):
-                if st.button("🔁 再來一局", type="primary", use_container_width=True, key="battle_rematch_sidebar"):
+                if st.button("再來一局", type="primary", use_container_width=True, key="battle_rematch_sidebar"):
                     ok, msg = reset_battle_room_for_rematch(requested_room_code, requested_player_name)
                     if ok:
                         st.session_state.battle_question_no = 1
@@ -2303,7 +2339,7 @@ with st.sidebar:
         if room_joined_now:
             st.success(f"目前已在房間：{requested_room_code}")
             install_battle_membership_storage(requested_room_code, requested_player_name, True)
-            if st.button("🚪 離開房間", use_container_width=True):
+            if st.button("離開房間", use_container_width=True):
                 ok, msg = remove_battle_player(requested_room_code, requested_player_name, reason="left")
                 st.session_state.battle_room_joined = False
                 st.session_state.battle_joined_room_code = ""
@@ -2323,19 +2359,19 @@ with st.sidebar:
             if kick_candidates:
                 st.markdown("##### 房主管理")
                 kick_target = st.selectbox("選擇要踢出的玩家", kick_candidates, key="battle_kick_target")
-                if st.button("🚫 踢出玩家", use_container_width=True):
+                if st.button("踢出玩家", use_container_width=True):
                     ok, msg = kick_battle_player(requested_room_code, requested_player_name, kick_target)
                     st.session_state.battle_room_notice = msg
                     st.rerun()
 
-        if st.button("🔄 立即同步房間", use_container_width=True):
+        if st.button("立即同步房間", use_container_width=True):
             if room_joined_now:
                 register_battle_presence(requested_room_code, requested_player_name, st.session_state.get("setting_interval_label", "日線"), st.session_state.get("setting_challenge_bars", 120))
             st.rerun()
 
         st.caption("對戰模式由房主開始；開始後玩家從第 1 關作答，禁止回看並有時間限制。")
     else:
-        if st.button("🎲 隨機開新關卡", use_container_width=True):
+        if st.button("隨機開新關卡", use_container_width=True):
             if stock_pool:
                 st.session_state.pending_stock_code = random.choice(stock_pool)
                 st.session_state.pending_new_challenge = True
@@ -2357,7 +2393,7 @@ with st.sidebar:
     chart_height = st.slider("圖表高度", min_value=600, max_value=1200, step=20, key="setting_chart_height")
 
     st.markdown("---")
-    if st.button("🔄 重設本關交易帳戶", use_container_width=True):
+    if st.button("重設交易帳戶", use_container_width=True):
         reset_account(initial_cash)
         st.rerun()
 
@@ -2391,7 +2427,7 @@ if mode == "對戰模式":
         st.info("請先在左側建立房間或加入房間。加入後會看到房間玩家列表，房主按開始後才會進入第 1 關。")
         players_df = build_battle_room_players_df(battle_room_code)
         if not players_df.empty:
-            st.markdown("#### 👥 目前房間玩家")
+            st.markdown("#### 房間玩家")
             st.dataframe(players_df, use_container_width=True, hide_index=True)
         st.stop()
 
@@ -2404,7 +2440,7 @@ if mode == "對戰模式":
 
     if not battle_room_started:
         install_battle_live_sync(True, seconds=2.0)
-        st.markdown("### 🕒 對戰等待室")
+        st.markdown("### 等待室")
         owner_name = battle_room_meta.get("created_by", "") if isinstance(battle_room_meta, dict) else ""
         st.info(f"房間 {battle_room_code} 尚未開始，等待房主 {owner_name or '未知'} 按『開始對戰』。")
         c1, c2, c3 = st.columns(3)
@@ -2412,7 +2448,7 @@ if mode == "對戰模式":
         c2.metric("關卡數", f"{battle_question_count} 關")
         c3.metric("每關限時", f"{battle_time_limit_minutes} 分鐘")
         players_df = build_battle_room_players_df(battle_room_code)
-        st.markdown("#### 👥 房間玩家")
+        st.markdown("#### 房間玩家")
         if not players_df.empty:
             st.dataframe(players_df, use_container_width=True, hide_index=True)
         else:
@@ -2545,7 +2581,7 @@ if mode == "對戰模式":
 # 9. Top Info
 # =========================================================
 col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-col1.subheader(f"📊 {show_title}")
+col1.subheader(f"{show_title}")
 col2.metric("目前價格", f"{current_price:.2f}")
 col3.metric("關卡進度", f"{bars_passed} / {bars_total}")
 col4.metric("剩餘 K 數", f"{bars_left}")
@@ -2561,8 +2597,8 @@ if mode == "對戰模式":
     install_battle_live_sync(True, seconds=1.0 if not battle_game_over else 5.0)
     install_battle_focus_mode(True)
     chart_height = max(chart_height, 920)
-    st.markdown("### 🏆 對戰模式")
-    st.warning("對戰模式已鎖定回看：不能按上一根或 -10，只能往下一根推進。")
+    st.markdown("### 對戰模式")
+    st.warning("對戰模式禁止回看，只能往前推進。")
     players_df = build_battle_room_players_df(battle_room_code)
     online_count = int((players_df["狀態"] == "在線").sum()) if not players_df.empty and "狀態" in players_df.columns else 0
     b1, b2, b3, b4, b5, b6 = st.columns(6)
@@ -2574,13 +2610,13 @@ if mode == "對戰模式":
     b6.metric("倒數時間", "結束" if battle_game_over else (str(battle_time_status["time_text"]) if battle_time_status else "--"))
 
     if battle_game_over:
-        st.success("🏁 本房所有關卡時間已結束，系統進入最終結算。")
+        st.success("本房所有關卡時間已結束，系統進入最終結算。")
     elif battle_time_up:
-        st.error("⏰ 本題時間到！系統會自動提交當下成績，並等待下一題同步開始。")
+        st.error("本題時間到。系統會自動提交當下成績，並等待下一題同步開始。")
     else:
         st.info(f"本題限時 {battle_time_limit_minutes} 分鐘，剩餘 {battle_time_status['time_text']}。")
 
-    with st.expander("👥 房間玩家 / 進入狀態", expanded=True):
+    with st.expander("房間玩家 / 進入狀態", expanded=True):
         if not players_df.empty:
             st.dataframe(players_df, use_container_width=True, hide_index=True)
         else:
@@ -2602,7 +2638,7 @@ if mode == "對戰模式":
 
     leaderboard_df = build_battle_leaderboard(battle_room_code)
     if not leaderboard_df.empty:
-        st.markdown("#### 🏆 房間排行榜")
+        st.markdown("#### 排行榜")
         st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
     else:
         st.caption("目前房間還沒有玩家提交成績。完成每題或時間到後按「提交本題成績」即可上榜。")
@@ -2611,13 +2647,13 @@ if mode == "對戰模式":
     if winner_info.get("has_winner"):
         if battle_game_over or winner_info.get("all_finished"):
             render_battle_result_modal(winner_info, leaderboard_df, battle_room_code, battle_round_no, can_rematch=bool(st.session_state.get("battle_room_owner", False)), player_name=battle_player_name)
-            st.success("🎉 對戰結束！" + winner_info.get("message", ""))
+            st.success("對戰結束。" + winner_info.get("message", ""))
             balloon_key = f"battle_winner_balloons_{battle_room_code}_{battle_round_no}"
             if not st.session_state.get(balloon_key, False):
                 st.balloons()
                 st.session_state[balloon_key] = True
             if st.session_state.get("battle_room_owner", False):
-                if st.button("🔁 再來一局", type="primary", use_container_width=True, key="battle_rematch_main_top"):
+                if st.button("再來一局", type="primary", use_container_width=True, key="battle_rematch_main_top"):
                     ok, msg = reset_battle_room_for_rematch(battle_room_code, battle_player_name)
                     if ok:
                         st.session_state.battle_question_no = 1
@@ -2632,8 +2668,8 @@ if mode == "對戰模式":
 # =========================================================
 # 9.5 Indicator Checkboxes
 # =========================================================
-st.markdown("#### 📊 指標設定")
-st.caption("指標面板放在重播控制上方：按「下一根」前會先渲染 checkbox，所以 MA/EMA/VWAP 不會被 Streamlit 清掉。每位使用者設定仍儲存在自己的 session / browser localStorage。")
+st.markdown("#### 指標")
+st.caption("勾選要顯示的指標。")
 
 indicator_cols = st.columns(8)
 for idx, indicator in enumerate(INDICATOR_OPTIONS):
@@ -2663,40 +2699,40 @@ trade_actions_disabled = mode == "對戰模式" and (battle_time_up or battle_cu
 # =========================================================
 # 10. Replay Control
 # =========================================================
-st.markdown("### 🕹️ 重播控制")
+st.markdown("### 控制")
 replay_col1, replay_col2, replay_col3, replay_col4, replay_col5, replay_col6 = st.columns([1, 1.3, 1.8, 1.8, 1.3, 1])
 
 with replay_col1:
-    if st.button("⏮️ -10", use_container_width=True, disabled=not allow_back_actions):
+    if st.button("-10", use_container_width=True, disabled=not allow_back_actions):
         st.session_state.current_idx = max(min_idx, st.session_state.current_idx - 10)
         st.session_state.show_answer = False
         st.rerun()
 
 with replay_col2:
-    if st.button("⬅️ 上一根", use_container_width=True, disabled=not allow_back_actions):
+    if st.button("上一根", use_container_width=True, disabled=not allow_back_actions):
         st.session_state.current_idx = max(min_idx, st.session_state.current_idx - 1)
         st.session_state.show_answer = False
         st.rerun()
 
 with replay_col3:
-    if st.button("➡️ 下一根", type="primary", use_container_width=True, disabled=not allow_forward_actions):
+    if st.button("下一根", type="primary", use_container_width=True, disabled=not allow_forward_actions):
         st.session_state.current_idx = min(max_idx, st.session_state.current_idx + 1)
         st.session_state.show_answer = False
         st.rerun()
 
 with replay_col4:
-    if st.button("👁️ 對答案 / 顯示終點", use_container_width=True, disabled=(mode == "對戰模式")):
+    if st.button("顯示終點", use_container_width=True, disabled=(mode == "對戰模式")):
         st.session_state.show_answer = not st.session_state.show_answer
         st.rerun()
 
 with replay_col5:
-    if st.button("⏭️ +10", use_container_width=True, disabled=not allow_forward_actions):
+    if st.button("+10", use_container_width=True, disabled=not allow_forward_actions):
         st.session_state.current_idx = min(max_idx, st.session_state.current_idx + 10)
         st.session_state.show_answer = False
         st.rerun()
 
 with replay_col6:
-    if st.button("🎲 下一關", use_container_width=True, disabled=(mode == "對戰模式")):
+    if st.button("下一關", use_container_width=True, disabled=(mode == "對戰模式")):
         if mode == "對戰模式":
             next_question_no = min(battle_question_count, int(st.session_state.battle_question_no) + 1)
             st.session_state.battle_question_no = next_question_no
@@ -2707,12 +2743,12 @@ with replay_col6:
         st.session_state.pending_new_challenge = True
         st.rerun()
 
-st.caption("快捷鍵：`→` 下一根。對戰模式禁止 `←` 上一根與 `-10` 回看；非對戰模式仍可使用左右鍵。")
+st.caption("快捷鍵：→ 下一根；對戰模式禁止回看。")
 
 # =========================================================
 # 11. Account / Trade Panel
 # =========================================================
-st.markdown("#### 💰 模擬交易帳戶")
+st.markdown("#### 帳戶")
 a1, a2, a3, a4, a5, a6, a7 = st.columns(7)
 a1.metric("可用現金", f"{st.session_state.cash:,.0f}")
 a2.metric("目前持倉", get_position_label())
@@ -2728,17 +2764,17 @@ if short_maintenance_rate is not None:
         f"目前最多可再新增放空 {max_new_short_lots} 張。"
     )
     if short_maintenance_rate < TW_MIN_MAINTENANCE_RATE * 100:
-        st.error("⚠️ 融券維持率低於 130%，模擬規則限制：不能再加空，只能回補或全部平倉。")
+        st.error("融券維持率低於 130%，不能再加空，只能回補或平倉。")
     elif short_maintenance_rate < TW_SAFE_MAINTENANCE_RATE * 100:
-        st.warning("⚠️ 融券維持率低於 166%，接近追繳風險區，請注意風險。")
+        st.warning("融券維持率低於 166%，接近追繳風險區。")
 
-st.markdown("#### 🧾 買入 / 賣出 / 放空 / 回補")
+st.markdown("#### 下單")
 t1, t2, t3, t4, t5, t6, t7 = st.columns([2, 1, 1, 1, 1, 1, 1])
 trade_note = t1.text_input("買賣原因", placeholder="例：突破箱頂買入 / 跌破支撐停損 / 壓力不過放空 / 空單回補")
 lot_count = t2.number_input("交易張數", min_value=1, max_value=100, value=1, step=1)
 
 with t3:
-    if st.button("🔴 買入做多", type="primary", use_container_width=True, disabled=trade_actions_disabled):
+    if st.button("買入", type="primary", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = buy_shares(current_row, lot_count, trade_note)
         if ok:
             st.toast(msg)
@@ -2747,7 +2783,7 @@ with t3:
         st.rerun()
 
 with t4:
-    if st.button("🟢 賣出多單", use_container_width=True, disabled=trade_actions_disabled):
+    if st.button("賣出", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = sell_shares(current_row, lot_count, trade_note)
         if ok:
             st.toast(msg)
@@ -2756,7 +2792,7 @@ with t4:
         st.rerun()
 
 with t5:
-    if st.button("🔵 放空", use_container_width=True, disabled=trade_actions_disabled):
+    if st.button("放空", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = short_shares(current_row, lot_count, trade_note)
         if ok:
             st.toast(msg)
@@ -2765,7 +2801,7 @@ with t5:
         st.rerun()
 
 with t6:
-    if st.button("🟣 回補空單", use_container_width=True, disabled=trade_actions_disabled):
+    if st.button("回補", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = cover_shares(current_row, lot_count, trade_note)
         if ok:
             st.toast(msg)
@@ -2774,7 +2810,7 @@ with t6:
         st.rerun()
 
 with t7:
-    if st.button("⚪ 全部平倉", use_container_width=True, disabled=trade_actions_disabled):
+    if st.button("平倉", use_container_width=True, disabled=trade_actions_disabled):
         ok, msg = close_all(current_row, trade_note)
         if ok:
             st.toast(msg)
@@ -2845,16 +2881,16 @@ if selected_indicators:
     if current_indicator_values:
         st.caption("目前指標數值：" + "　".join(current_indicator_values))
 
-st.info("畫圖方式：圖表上方選「趨勢線 / 水平線 / 矩形 / 斐波 / 文字」後直接點圖。刪除請切到「刪除」後點物件。")
+st.caption("畫圖工具在 K 線圖上方；選工具後直接點圖。")
 
 # =========================================================
 # 14. Results / Logs
 # =========================================================
 show_stage_result = st.session_state.current_idx >= st.session_state.challenge_end_idx or (mode == "對戰模式" and battle_time_up)
 if show_stage_result:
-    st.markdown("### 🏁 闖關結果")
+    st.markdown("### 闖關結果")
     if mode == "對戰模式" and battle_time_up and st.session_state.current_idx < st.session_state.challenge_end_idx:
-        st.error(f"⏰ 本題時間到！系統已用目前總資產 {total_equity:,.0f} 元自動提交本題成績。")
+        st.error(f"本題時間到。系統已用目前總資產 {total_equity:,.0f} 元自動提交本題成績。")
     elif return_pct >= target_return_pct:
         st.success(f"過關！目標 {target_return_pct:.2f}%，你的報酬率 {return_pct:.2f}%。")
     else:
@@ -2875,7 +2911,7 @@ if show_stage_result:
             st.warning("請先在左側建立或加入房間，才能提交本題成績。")
 
         with c_submit:
-            if st.button("🏁 提交本題成績到房間排行榜", type="primary", use_container_width=True, disabled=not can_submit_battle):
+            if st.button("提交本題成績", type="primary", use_container_width=True, disabled=not can_submit_battle):
                 submit_battle_score(
                     room_code=battle_room_code,
                     player_name=battle_player_name,
@@ -2890,7 +2926,7 @@ if show_stage_result:
                 st.session_state.battle_last_submit_message = f"已提交第 {battle_question_no} 題：{total_equity:,.0f} 元"
                 st.rerun()
         with c_next:
-            if st.button("➡️ 等待下一題自動開始", use_container_width=True, disabled=True):
+            if st.button("等待下一題自動開始", use_container_width=True, disabled=True):
                 next_question_no = min(battle_question_count, battle_question_no + 1)
                 st.session_state.battle_question_no = next_question_no
                 reset_question_timer(battle_room_code, battle_player_name, next_question_no)
@@ -2905,10 +2941,10 @@ if show_stage_result:
 
         latest_leaderboard = build_battle_leaderboard(battle_room_code)
         if not latest_leaderboard.empty:
-            st.markdown("#### 🏆 最新房間排行榜")
+            st.markdown("#### 最新排行榜")
             st.dataframe(latest_leaderboard, use_container_width=True, hide_index=True)
 
-st.markdown("#### 📒 買賣紀錄")
+st.markdown("#### 交易紀錄")
 if st.session_state.trade_log:
     trade_df = pd.DataFrame(st.session_state.trade_log)
     # 相容舊版交易紀錄：若使用者部署更新前已有紀錄，補上新欄位避免 KeyError。
