@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V32 fixed fullscreen exit + visible sidebar toggle
+# Deployment version：V33 robust sidebar toggle default-open
 
 import base64
 import hashlib
@@ -51,7 +51,7 @@ st.markdown(
         color:#e5e7eb !important;
     }
     #MainMenu, footer {visibility: hidden;}
-    /* V32：隱藏 Streamlit 預設黑色 header，改用自訂左上角選單按鈕。 */
+    /* V33：隱藏 Streamlit 預設黑色 header，改用自訂左上角選單按鈕。 */
     header[data-testid="stHeader"] {
         display:none !important;
         height:0 !important;
@@ -332,43 +332,57 @@ def install_battle_focus_mode(enabled: bool) -> None:
 
 
 def install_sidebar_toggle_button() -> None:
-    """固定左上角的選單按鈕，直接控制側邊欄顯示，不依賴 Streamlit header。"""
+    """固定左上角的選單按鈕。V33 改成預設展開，且可從 Streamlit 內建 collapsed 狀態恢復。"""
     components.html(
         """
         <script>
         (function(){
             const doc = window.parent.document;
+            const STORAGE_KEY = 'barreplay_sidebar_open_v33';
 
-            if (!doc.getElementById('barreplay-sidebar-toggle-style-v32')) {
+            if (!doc.getElementById('barreplay-sidebar-toggle-style-v33')) {
                 const style = doc.createElement('style');
-                style.id = 'barreplay-sidebar-toggle-style-v32';
+                style.id = 'barreplay-sidebar-toggle-style-v33';
                 style.textContent = `
+                    header[data-testid="stHeader"]{display:none!important;height:0!important;min-height:0!important;visibility:hidden!important;}
+                    div[data-testid="stToolbar"]{display:none!important;visibility:hidden!important;pointer-events:none!important;}
+
                     #barreplay-sidebar-toggle{
                         position:fixed!important;
                         left:14px!important;
                         top:14px!important;
                         z-index:2147483647!important;
-                        min-width:74px!important;
-                        height:34px!important;
-                        padding:0 12px!important;
+                        min-width:78px!important;
+                        height:36px!important;
+                        padding:0 14px!important;
                         border-radius:999px!important;
                         border:1px solid #334155!important;
-                        background:rgba(17,24,39,.96)!important;
+                        background:rgba(15,23,42,.98)!important;
                         color:#f8fafc!important;
                         font-size:14px!important;
                         font-weight:800!important;
                         display:flex!important;
                         align-items:center!important;
                         justify-content:center!important;
-                        box-shadow:0 12px 32px rgba(0,0,0,.45)!important;
+                        box-shadow:0 12px 32px rgba(0,0,0,.50)!important;
                         cursor:pointer!important;
+                        pointer-events:auto!important;
                     }
-                    #barreplay-sidebar-toggle:hover{background:#1f2937!important;border-color:#475569!important;}
+                    #barreplay-sidebar-toggle:hover{background:#1f2937!important;border-color:#64748b!important;}
+
+                    /* 不再用 display:none 隱藏 sidebar，避免之後打不開。 */
                     body.barreplay-sidebar-hidden section[data-testid="stSidebar"]{
-                        display:none!important;
-                        visibility:hidden!important;
                         width:0!important;
                         min-width:0!important;
+                        max-width:0!important;
+                        flex-basis:0!important;
+                        overflow:hidden!important;
+                        opacity:0!important;
+                        transform:translateX(-110%)!important;
+                        pointer-events:none!important;
+                    }
+                    body.barreplay-sidebar-hidden section[data-testid="stSidebar"] *{
+                        pointer-events:none!important;
                     }
                     body.barreplay-sidebar-hidden section[data-testid="stSidebar"] + div,
                     body.barreplay-sidebar-hidden [data-testid="stSidebar"] + div{
@@ -387,16 +401,32 @@ def install_sidebar_toggle_button() -> None:
                 doc.body.appendChild(btn);
             }
 
-            function sidebarEl(){ return doc.querySelector('section[data-testid="stSidebar"]'); }
+            function sidebarEl(){
+                return doc.querySelector('section[data-testid="stSidebar"]');
+            }
+
+            function tryClickNativeExpand(){
+                const candidates = Array.from(doc.querySelectorAll(
+                    'button[aria-label*="sidebar"], button[title*="sidebar"], button[aria-label*="Sidebar"], button[title*="Sidebar"], [data-testid="stSidebarCollapsedControl"] button, [data-testid="collapsedControl"] button'
+                ));
+                for (const el of candidates) {
+                    try { el.click(); return true; } catch(e) {}
+                }
+                return false;
+            }
+
             function sidebarOpen(){
+                if (doc.body.classList.contains('barreplay-sidebar-hidden')) return false;
                 const sidebar = sidebarEl();
-                if(!sidebar) return !doc.body.classList.contains('barreplay-sidebar-hidden');
+                if(!sidebar) return false;
                 const r = sidebar.getBoundingClientRect();
                 const s = doc.defaultView.getComputedStyle(sidebar);
-                return !doc.body.classList.contains('barreplay-sidebar-hidden') && s.display !== 'none' && s.visibility !== 'hidden' && r.width > 60;
+                return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 80 && r.height > 50;
             }
-            function setSidebar(open){
+
+            function setSidebar(open, persist=true){
                 const sidebar = sidebarEl();
+
                 if(open){
                     doc.body.classList.remove('barreplay-sidebar-hidden');
                     if(sidebar){
@@ -404,30 +434,43 @@ def install_sidebar_toggle_button() -> None:
                         sidebar.style.removeProperty('visibility');
                         sidebar.style.removeProperty('width');
                         sidebar.style.removeProperty('min-width');
+                        sidebar.style.removeProperty('max-width');
+                        sidebar.style.removeProperty('flex-basis');
+                        sidebar.style.removeProperty('overflow');
+                        sidebar.style.removeProperty('opacity');
+                        sidebar.style.removeProperty('transform');
+                        sidebar.style.removeProperty('pointer-events');
+                    } else {
+                        tryClickNativeExpand();
                     }
-                    try{localStorage.setItem('barreplay_sidebar_open','1');}catch(e){}
+                    // 若 Streamlit 自己仍處在 collapsed 狀態，延遲點一次內建展開鈕。
+                    setTimeout(()=>{ if(!sidebarOpen()) tryClickNativeExpand(); }, 120);
+                    setTimeout(()=>{ if(!sidebarOpen()) tryClickNativeExpand(); }, 450);
+                    if(persist){try{localStorage.setItem(STORAGE_KEY,'1');}catch(e){}}
+                    btn.textContent = '收起';
                 }else{
                     doc.body.classList.add('barreplay-sidebar-hidden');
-                    if(sidebar){
-                        sidebar.style.setProperty('display','none','important');
-                        sidebar.style.setProperty('visibility','hidden','important');
-                        sidebar.style.setProperty('width','0','important');
-                        sidebar.style.setProperty('min-width','0','important');
-                    }
-                    try{localStorage.setItem('barreplay_sidebar_open','0');}catch(e){}
+                    if(persist){try{localStorage.setItem(STORAGE_KEY,'0');}catch(e){}}
+                    btn.textContent = '選單';
                 }
-                btn.textContent = open ? '收起' : '選單';
             }
 
-            btn.onclick = function(){ setSidebar(!sidebarOpen()); };
+            btn.onclick = function(e){
+                e.preventDefault();
+                e.stopPropagation();
+                setSidebar(!sidebarOpen(), true);
+            };
 
-            let saved = '1';
-            try{ saved = localStorage.getItem('barreplay_sidebar_open') || '1'; }catch(e){}
-            setSidebar(saved !== '0');
+            // V33 使用新 key，避免沿用舊版存下來的 collapsed=0，第一次載入一律展開。
+            let saved = null;
+            try{ saved = localStorage.getItem(STORAGE_KEY); }catch(e){}
+            const shouldOpen = (saved === null) ? true : saved !== '0';
+            setSidebar(shouldOpen, false);
 
             // Streamlit rerun 後 sidebar DOM 會重建，短時間內補套一次狀態。
-            setTimeout(()=>setSidebar((localStorage.getItem('barreplay_sidebar_open') || '1') !== '0'), 300);
-            setTimeout(()=>setSidebar((localStorage.getItem('barreplay_sidebar_open') || '1') !== '0'), 900);
+            setTimeout(()=>{ let v='1'; try{v=localStorage.getItem(STORAGE_KEY)||'1';}catch(e){} setSidebar(v !== '0', false); }, 300);
+            setTimeout(()=>{ let v='1'; try{v=localStorage.getItem(STORAGE_KEY)||'1';}catch(e){} setSidebar(v !== '0', false); }, 900);
+            setTimeout(()=>{ let v='1'; try{v=localStorage.getItem(STORAGE_KEY)||'1';}catch(e){} setSidebar(v !== '0', false); }, 1600);
         })();
         </script>
         """,
@@ -2398,7 +2441,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("設定")
-    st.caption("版本：V32-fullscreen-exit-sidebar-fix")
+    st.caption("版本：V33-sidebar-toggle-stable")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
