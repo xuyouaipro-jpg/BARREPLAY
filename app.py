@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V31 dark fullscreen chart + custom sidebar toggle + pseudo fullscreen stable actions
+# Deployment version：V32 fixed fullscreen exit + visible sidebar toggle
 
 import base64
 import hashlib
@@ -39,7 +39,7 @@ st.set_page_config(
 )
 
 st.title("BARREPLAY")
-st.caption("裸 K 復盤｜對戰模式｜深色全螢幕介面")
+st.caption("裸 K 復盤｜對戰模式｜深色介面")
 
 # Minimal UI theme: remove visual noise and keep repeated controls compact.
 st.markdown(
@@ -51,53 +51,46 @@ st.markdown(
         color:#e5e7eb !important;
     }
     #MainMenu, footer {visibility: hidden;}
+    /* V32：隱藏 Streamlit 預設黑色 header，改用自訂左上角選單按鈕。 */
     header[data-testid="stHeader"] {
-        visibility: visible !important;
-        background: rgba(11, 15, 22, 0.96) !important;
-        height: 2.6rem !important;
-        z-index: 999999 !important;
+        display:none !important;
+        height:0 !important;
+        min-height:0 !important;
+        visibility:hidden !important;
     }
-    header[data-testid="stHeader"] * {visibility: visible !important;}
-    div[data-testid="stToolbar"] {display:none !important;}
+    div[data-testid="stToolbar"],
     div[data-testid="collapsedControl"],
-    div[data-testid="stSidebarCollapsedControl"],
-    button[data-testid="baseButton-headerNoPadding"] {
-        display:flex !important;
-        visibility:visible !important;
-        opacity:1 !important;
-        pointer-events:auto !important;
-        z-index:1000000 !important;
-    }
-    [data-testid="collapsedControl"] svg,
-    [data-testid="stSidebarCollapsedControl"] svg {
-        color:#e5e7eb !important;
-        fill:#e5e7eb !important;
+    div[data-testid="stSidebarCollapsedControl"] {
+        display:none !important;
+        visibility:hidden !important;
+        pointer-events:none !important;
     }
 
     /* 自訂左上角側邊欄開關，不依賴 Streamlit 內建 header。 */
     #barreplay-sidebar-toggle {
-        position: fixed;
-        left: 10px;
-        top: 10px;
-        z-index: 2147483646;
-        width: 38px;
-        height: 38px;
-        border-radius: 10px;
+        position: fixed !important;
+        left: 14px !important;
+        top: 14px !important;
+        z-index: 2147483647 !important;
+        min-width: 74px;
+        height: 34px;
+        padding: 0 12px;
+        border-radius: 999px;
         border: 1px solid #334155;
-        background: #111827;
+        background: rgba(17,24,39,.96);
         color: #f8fafc;
-        font-size: 20px;
+        font-size: 14px;
         font-weight: 800;
-        display: flex;
+        display: flex !important;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 10px 28px rgba(0,0,0,.35);
+        box-shadow: 0 12px 32px rgba(0,0,0,.45);
         cursor: pointer;
     }
     #barreplay-sidebar-toggle:hover { background:#1f2937; border-color:#475569; }
 
     .block-container {
-        padding-top: 1.1rem;
+        padding-top: 3.2rem;
         padding-bottom: 2.5rem;
         max-width: 100%;
         background:#0b0f16 !important;
@@ -323,11 +316,9 @@ def install_battle_focus_mode(enabled: bool) -> None:
                 const style = doc.createElement('style');
                 style.id = 'barreplay-battle-focus-style-v22';
                 style.innerHTML = `
-                    header[data-testid="stHeader"]{display:block!important;visibility:visible!important;background:rgba(11,15,22,.96)!important;height:2.6rem!important;z-index:999999!important;}
-                    header[data-testid="stHeader"] *{visibility:visible!important;}
-                    div[data-testid="stToolbar"]{display:none!important;}
-                    div[data-testid="collapsedControl"],div[data-testid="stSidebarCollapsedControl"],button[data-testid="baseButton-headerNoPadding"]{display:flex!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;z-index:1000000!important;}
-                    div.block-container{padding-top:0.25rem!important;padding-left:0.45rem!important;padding-right:0.45rem!important;max-width:100%!important;}
+                    header[data-testid="stHeader"]{display:none!important;height:0!important;visibility:hidden!important;}
+                    div[data-testid="stToolbar"],div[data-testid="collapsedControl"],div[data-testid="stSidebarCollapsedControl"],button[data-testid="baseButton-headerNoPadding"]{display:none!important;visibility:hidden!important;pointer-events:none!important;}
+                    div.block-container{padding-top:3.2rem!important;padding-left:0.45rem!important;padding-right:0.45rem!important;max-width:100%!important;}
                     #MainMenu, footer{display:none!important;}
                 `;
                 doc.head.appendChild(style);
@@ -341,70 +332,102 @@ def install_battle_focus_mode(enabled: bool) -> None:
 
 
 def install_sidebar_toggle_button() -> None:
-    """固定在左上角的側邊欄開關。避免側邊欄收起後找不到重新打開按鈕。"""
+    """固定左上角的選單按鈕，直接控制側邊欄顯示，不依賴 Streamlit header。"""
     components.html(
         """
         <script>
         (function(){
             const doc = window.parent.document;
-            if (doc.getElementById('barreplay-sidebar-toggle')) return;
 
-            const btn = doc.createElement('button');
-            btn.id = 'barreplay-sidebar-toggle';
-            btn.type = 'button';
-            btn.title = '開啟 / 收回側邊欄';
-            btn.textContent = '☰';
-            doc.body.appendChild(btn);
+            if (!doc.getElementById('barreplay-sidebar-toggle-style-v32')) {
+                const style = doc.createElement('style');
+                style.id = 'barreplay-sidebar-toggle-style-v32';
+                style.textContent = `
+                    #barreplay-sidebar-toggle{
+                        position:fixed!important;
+                        left:14px!important;
+                        top:14px!important;
+                        z-index:2147483647!important;
+                        min-width:74px!important;
+                        height:34px!important;
+                        padding:0 12px!important;
+                        border-radius:999px!important;
+                        border:1px solid #334155!important;
+                        background:rgba(17,24,39,.96)!important;
+                        color:#f8fafc!important;
+                        font-size:14px!important;
+                        font-weight:800!important;
+                        display:flex!important;
+                        align-items:center!important;
+                        justify-content:center!important;
+                        box-shadow:0 12px 32px rgba(0,0,0,.45)!important;
+                        cursor:pointer!important;
+                    }
+                    #barreplay-sidebar-toggle:hover{background:#1f2937!important;border-color:#475569!important;}
+                    body.barreplay-sidebar-hidden section[data-testid="stSidebar"]{
+                        display:none!important;
+                        visibility:hidden!important;
+                        width:0!important;
+                        min-width:0!important;
+                    }
+                    body.barreplay-sidebar-hidden section[data-testid="stSidebar"] + div,
+                    body.barreplay-sidebar-hidden [data-testid="stSidebar"] + div{
+                        margin-left:0!important;
+                    }
+                `;
+                doc.head.appendChild(style);
+            }
 
-            function isVisible(el){
-                if(!el) return false;
-                const r = el.getBoundingClientRect();
-                const s = doc.defaultView.getComputedStyle(el);
-                return r.width > 30 && r.height > 30 && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+            let btn = doc.getElementById('barreplay-sidebar-toggle');
+            if (!btn) {
+                btn = doc.createElement('button');
+                btn.id = 'barreplay-sidebar-toggle';
+                btn.type = 'button';
+                btn.title = '開啟 / 收回側邊欄';
+                doc.body.appendChild(btn);
             }
-            function findBuiltInButton(open){
-                const selectors = open ? [
-                    'div[data-testid="collapsedControl"] button',
-                    'div[data-testid="stSidebarCollapsedControl"] button',
-                    'button[aria-label="Open sidebar"]',
-                    'button[aria-label="Expand sidebar"]',
-                    'button[title="Open sidebar"]',
-                    'button[title="Expand sidebar"]'
-                ] : [
-                    'button[data-testid="stSidebarCollapseButton"]',
-                    'button[aria-label="Close sidebar"]',
-                    'button[aria-label="Collapse sidebar"]',
-                    'button[title="Close sidebar"]',
-                    'button[title="Collapse sidebar"]'
-                ];
-                for(const sel of selectors){
-                    const el = doc.querySelector(sel);
-                    if(isVisible(el)) return el;
-                }
-                const buttons = Array.from(doc.querySelectorAll('button')).filter(b => b.id !== 'barreplay-sidebar-toggle');
-                const patterns = open ? [/open sidebar/i,/expand sidebar/i,/show sidebar/i,/側邊/i,/邊欄/i/] : [/close sidebar/i,/collapse sidebar/i,/hide sidebar/i,/側邊/i,/邊欄/i/];
-                for(const b of buttons){
-                    const label = [b.innerText, b.getAttribute('aria-label'), b.title].filter(Boolean).join(' ');
-                    if(isVisible(b) && patterns.some(re => re.test(label))) return b;
-                }
-                return null;
-            }
-            function sidebarIsOpen(){
-                const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                return isVisible(sidebar) && sidebar.getBoundingClientRect().width > 120;
-            }
-            btn.addEventListener('click', function(){
-                const open = !sidebarIsOpen();
-                const builtIn = findBuiltInButton(open);
-                if(builtIn){ builtIn.click(); return; }
 
-                // 後備方案：至少切換側邊欄 DOM 顯示，不讓使用者完全卡住。
-                const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                if(sidebar){
-                    sidebar.style.display = open ? 'block' : 'none';
-                    sidebar.style.visibility = open ? 'visible' : 'hidden';
+            function sidebarEl(){ return doc.querySelector('section[data-testid="stSidebar"]'); }
+            function sidebarOpen(){
+                const sidebar = sidebarEl();
+                if(!sidebar) return !doc.body.classList.contains('barreplay-sidebar-hidden');
+                const r = sidebar.getBoundingClientRect();
+                const s = doc.defaultView.getComputedStyle(sidebar);
+                return !doc.body.classList.contains('barreplay-sidebar-hidden') && s.display !== 'none' && s.visibility !== 'hidden' && r.width > 60;
+            }
+            function setSidebar(open){
+                const sidebar = sidebarEl();
+                if(open){
+                    doc.body.classList.remove('barreplay-sidebar-hidden');
+                    if(sidebar){
+                        sidebar.style.removeProperty('display');
+                        sidebar.style.removeProperty('visibility');
+                        sidebar.style.removeProperty('width');
+                        sidebar.style.removeProperty('min-width');
+                    }
+                    try{localStorage.setItem('barreplay_sidebar_open','1');}catch(e){}
+                }else{
+                    doc.body.classList.add('barreplay-sidebar-hidden');
+                    if(sidebar){
+                        sidebar.style.setProperty('display','none','important');
+                        sidebar.style.setProperty('visibility','hidden','important');
+                        sidebar.style.setProperty('width','0','important');
+                        sidebar.style.setProperty('min-width','0','important');
+                    }
+                    try{localStorage.setItem('barreplay_sidebar_open','0');}catch(e){}
                 }
-            });
+                btn.textContent = open ? '收起' : '選單';
+            }
+
+            btn.onclick = function(){ setSidebar(!sidebarOpen()); };
+
+            let saved = '1';
+            try{ saved = localStorage.getItem('barreplay_sidebar_open') || '1'; }catch(e){}
+            setSidebar(saved !== '0');
+
+            // Streamlit rerun 後 sidebar DOM 會重建，短時間內補套一次狀態。
+            setTimeout(()=>setSidebar((localStorage.getItem('barreplay_sidebar_open') || '1') !== '0'), 300);
+            setTimeout(()=>setSidebar((localStorage.getItem('barreplay_sidebar_open') || '1') !== '0'), 900);
         })();
         </script>
         """,
@@ -2230,12 +2253,34 @@ function setPseudoFullscreen(on){
         const pdoc=window.parent.document;
         if(frame){
             if(on){
-                frame.dataset.brOldStyle=frame.getAttribute("style")||"";
-                frame.style.position="fixed";frame.style.inset="0";frame.style.width="100vw";frame.style.height="100vh";frame.style.zIndex="2147483647";frame.style.border="0";frame.style.background="#0f131a";
-                pdoc.documentElement.style.overflow="hidden";pdoc.body.style.overflow="hidden";
+                if(!frame.dataset.brOldStyle || frame.style.position !== "fixed"){
+                    frame.dataset.brOldStyle=frame.getAttribute("style")||"";
+                }
+                pdoc.documentElement.classList.add("barreplay-chart-fullscreen");
+                pdoc.body.classList.add("barreplay-chart-fullscreen");
+                frame.style.setProperty("position","fixed","important");
+                frame.style.setProperty("inset","0","important");
+                frame.style.setProperty("width","100vw","important");
+                frame.style.setProperty("height","100vh","important");
+                frame.style.setProperty("z-index","2147483646","important");
+                frame.style.setProperty("border","0","important");
+                frame.style.setProperty("background","#0f131a","important");
+                pdoc.documentElement.style.overflow="hidden";
+                pdoc.body.style.overflow="hidden";
             }else{
-                frame.setAttribute("style",frame.dataset.brOldStyle||"");
-                pdoc.documentElement.style.overflow="";pdoc.body.style.overflow="";
+                pdoc.documentElement.classList.remove("barreplay-chart-fullscreen");
+                pdoc.body.classList.remove("barreplay-chart-fullscreen");
+                try{frame.setAttribute("style",frame.dataset.brOldStyle||"");}catch(e){}
+                frame.style.removeProperty("position");
+                frame.style.removeProperty("inset");
+                frame.style.removeProperty("width");
+                frame.style.removeProperty("height");
+                frame.style.removeProperty("z-index");
+                frame.style.removeProperty("border");
+                frame.style.removeProperty("background");
+                pdoc.documentElement.style.overflow="";
+                pdoc.body.style.overflow="";
+                setTimeout(()=>{try{window.parent.scrollTo({top:0,behavior:"smooth"});}catch(e){}},80);
             }
         }
     }catch(e){}
@@ -2286,7 +2331,7 @@ if(d.type==="text"){const x=toX(d.time),y=toY(d.price);if(x===null||y===null){ct
 function distanceToSegment(px,py,x1,y1,x2,y2){const A=px-x1,B=py-y1,C=x2-x1,D=y2-y1;const dot=A*C+B*D,lenSq=C*C+D*D;let param=-1;if(lenSq!==0)param=dot/lenSq;let xx,yy;if(param<0){xx=x1;yy=y1;}else if(param>1){xx=x2;yy=y2;}else{xx=x1+param*C;yy=y1+param*D;}const dx=px-xx,dy=py-yy;return Math.sqrt(dx*dx+dy*dy);}
 function hitTest(px,py){for(let i=drawings.length-1;i>=0;i--){const d=drawings[i];if(d.type==="hline"){const y=toY(d.price);if(y!==null&&Math.abs(py-y)<8)return i;}if(d.type==="vline"){const x=toX(d.time);if(x!==null&&Math.abs(px-x)<8)return i;}if(d.type==="trend"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;if(distanceToSegment(px,py,x1,y1,x2,y2)<8)return i;}if(d.type==="rect"){const x1=toX(d.time1),y1=toY(d.price1),x2=toX(d.time2),y2=toY(d.price2);if([x1,y1,x2,y2].some(v=>v===null))continue;const left=Math.min(x1,x2),right=Math.max(x1,x2),top=Math.min(y1,y2),bottom=Math.max(y1,y2);if(px>=left&&px<=right&&py>=top&&py<=bottom)return i;}if(d.type==="fib"){const x1=toX(d.time1),x2=toX(d.time2);if(x1===null||x2===null)continue;const left=Math.min(x1,x2),right=Math.max(x1,x2);if(px<left-10||px>right+10)continue;for(const r of [0,.236,.382,.5,.618,.786,1]){const y=toY(d.high-(d.high-d.low)*r);if(y!==null&&Math.abs(py-y)<8)return i;}}if(d.type==="text"){const x=toX(d.time),y=toY(d.price);if(x!==null&&y!==null&&Math.abs(px-x)<60&&Math.abs(py-y)<20)return i;}}return -1;}
 canvas.addEventListener("click",e=>{const p=getMousePoint(e);if(!p)return;if(tool==="delete"){const idx=hitTest(p.x,p.y);if(idx>=0){drawings.splice(idx,1);saveDrawings();}return;}if(tool==="hline"){drawings.push({type:"hline",price:p.price,color:"#ffca28",width:2,text:"水平線"});saveDrawings();return;}if(tool==="vline"){drawings.push({type:"vline",time:p.time,color:"#64b5f6",width:2,text:"關鍵K"});saveDrawings();return;}if(tool==="text"){const text=prompt("輸入標註文字：","關鍵位置");if(text===null)return;drawings.push({type:"text",time:p.time,price:p.price,color:"#ffca28",text:text});saveDrawings();return;}if(tool==="trend"){if(!firstPoint){firstPoint=p;statusEl.innerText="趨勢線：已設定起點，請點終點";return;}drawings.push({type:"trend",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:""});firstPoint=null;saveDrawings();return;}if(tool==="rect"){if(!firstPoint){firstPoint=p;statusEl.innerText="矩形：已設定第一點，請點第二點";return;}drawings.push({type:"rect",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,color:"#ffca28",width:2,text:"區間"});firstPoint=null;saveDrawings();return;}if(tool==="fib"){if(!firstPoint){firstPoint=p;statusEl.innerText="斐波那契：已設定第一點，請點第二點";return;}drawings.push({type:"fib",time1:firstPoint.time,price1:firstPoint.price,time2:p.time,price2:p.price,high:Math.max(firstPoint.price,p.price),low:Math.min(firstPoint.price,p.price),color:"#ffca28",width:1.5,text:"Fib"});firstPoint=null;saveDrawings();return;}});
-function clickParentButtonByText(keyword){if(!allowBackActions&&isBackAction(keyword)){statusEl.innerText="對戰模式禁止回看，只能往前作答";return;}try{saveViewRange();}catch(e){}try{const buttons=Array.from(window.parent.document.querySelectorAll("button"));const target=buttons.find(btn=>btn.innerText&&btn.innerText.includes(keyword));if(target&&!target.disabled){target.click();return;}}catch(e){console.log("Direct parent click failed:",e);}try{window.parent.postMessage({type:"tv_replay_action",keyword:keyword},"*");}catch(e){console.log("postMessage failed:",e);}}
+function clickParentButtonByText(keyword){if(!allowBackActions&&isBackAction(keyword)){statusEl.innerText="對戰模式禁止回看，只能往前作答";return;}try{saveViewRange();}catch(e){}try{if(pseudoFullscreen){localStorage.setItem(fullscreenStateKey,"1");}}catch(e){}try{const buttons=Array.from(window.parent.document.querySelectorAll("button"));const target=buttons.find(btn=>btn.innerText&&btn.innerText.includes(keyword));if(target&&!target.disabled){target.click();return;}}catch(e){console.log("Direct parent click failed:",e);}try{window.parent.postMessage({type:"tv_replay_action",keyword:keyword},"*");}catch(e){console.log("postMessage failed:",e);}}
 document.querySelectorAll(".action-btn[data-action], .trade-btn[data-action]").forEach(btn=>btn.addEventListener("click",()=>clickParentButtonByText(btn.dataset.action)));
 document.addEventListener("keydown",e=>{const tag=(e.target.tagName||"").toLowerCase();if(tag==="input"||tag==="textarea"||e.target.isContentEditable)return;if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
 window.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"){e.preventDefault();if(allowBackActions)clickParentButtonByText("上一根");else statusEl.innerText="對戰模式禁止回看，只能往前作答";}if(e.key==="ArrowRight"){e.preventDefault();clickParentButtonByText("下一根");}},true);
@@ -2353,7 +2398,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("設定")
-    st.caption("版本：V31-sidebar-fullscreen-actions")
+    st.caption("版本：V32-fullscreen-exit-sidebar-fix")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
