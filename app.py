@@ -1,13 +1,15 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V35 infinite trendline
+# Deployment version：V36 auto stock universe
 
 import base64
 import hashlib
 import json
 import os
 import random
+import re
 import tempfile
+import urllib.request
 import uuid
 from datetime import datetime, timezone, timedelta
 from html import escape
@@ -39,7 +41,7 @@ st.set_page_config(
 )
 
 st.title("BARREPLAY")
-st.caption("裸 K 復盤｜對戰模式｜設定視窗")
+st.caption("裸 K 復盤｜對戰模式｜自動股票池")
 
 # Minimal UI theme: remove visual noise and keep repeated controls compact.
 st.markdown(
@@ -51,7 +53,7 @@ st.markdown(
         color:#e5e7eb !important;
     }
     #MainMenu, footer {visibility: hidden;}
-    /* V35：設定彈窗 + 趨勢線無限延伸。 */
+    /* V36：自動股票池 + 趨勢線無限延伸。 */
     header[data-testid="stHeader"] {
         display:none !important;
         height:0 !important;
@@ -177,6 +179,19 @@ BATTLE_MEMBERSHIP_KEY = "barreplay_battle_membership_v23"
 BATTLE_INTERNAL_RELOAD_KEY = "barreplay_internal_reload_v24"
 _BATTLE_LIVE_SYNC_INSTALLED_THIS_RUN = False
 BATTLE_DEFAULT_POOL_TEXT = "2330,2317,2454,2303,3037,3481,2603,2615,2002,2881,2882,2891,3711,2382,3231,2379,6669,2357,2368,2409"
+AUTO_POOL_AVG_VOLUME_DAYS = 30
+AUTO_POOL_MIN_AVG_VOLUME = 1_000_000
+AUTO_POOL_MIN_REL_VOLUME = 1.5
+AUTO_POOL_CACHE_HOURS = 6
+AUTO_POOL_FALLBACK_TICKERS = [
+    "1101.TW", "1102.TW", "1216.TW", "1301.TW", "1303.TW", "1326.TW", "1402.TW", "1605.TW",
+    "2002.TW", "2301.TW", "2303.TW", "2308.TW", "2317.TW", "2327.TW", "2330.TW", "2352.TW",
+    "2353.TW", "2356.TW", "2357.TW", "2379.TW", "2382.TW", "2395.TW", "2408.TW", "2409.TW",
+    "2412.TW", "2454.TW", "2474.TW", "2603.TW", "2609.TW", "2610.TW", "2615.TW", "2618.TW",
+    "2880.TW", "2881.TW", "2882.TW", "2883.TW", "2884.TW", "2885.TW", "2886.TW", "2887.TW",
+    "2890.TW", "2891.TW", "2892.TW", "3034.TW", "3037.TW", "3231.TW", "3481.TW", "3711.TW",
+    "4938.TW", "6669.TW", "8069.TWO", "8299.TWO", "5347.TWO", "5483.TWO", "6488.TWO"
+]
 
 DEFAULT_SETTINGS = {
     "mode": "闖關模式",
@@ -509,6 +524,7 @@ def init_session_state() -> None:
         "battle_room_notice": "",
         "battle_session_id": str(uuid.uuid4()),
         "battle_kicked_notice": "",
+        "auto_pool_preview": [],
     }
 
     for key, value in core_defaults.items():
@@ -610,6 +626,148 @@ def parse_stock_codes(text_value: str) -> list[str]:
     return list(dict.fromkeys(codes))
 
 
+def normalize_stock_for_yfinance(code_or_ticker: str) -> str:
+    """把 2330 / 2330.TW / 8069.TWO 統一成 yfinance 可用 ticker。"""
+    value = str(code_or_ticker).strip().upper()
+    if not value:
+        return ""
+    if value.endswith(".TW") or value.endswith(".TWO"):
+        return value
+    if value.isdigit():
+        return f"{value}.TW"
+    return value
+
+
+def _extract_stock_code_from_row(row: Any) -> str:
+    """從 TWSE / TPEX OpenAPI row 裡取出 4 碼普通股代號。"""
+    if isinstance(row, dict):
+        preferred_keys = [
+            "Code", "code", "證券代號", "有價證券代號", "股票代號", "公司代號", "代號",
+            "SecuritiesCompanyCode", "SecuritiesCode", "SecurityCode",
+        ]
+        for key in preferred_keys:
+            value = str(row.get(key, "")).strip()
+            if re.fullmatch(r"\d{4}", value):
+                return value
+        # 有些 OpenAPI 欄位名稱不穩，保守地從第一個 4 碼欄位取值。
+        for value in row.values():
+            value = str(value).strip()
+            if re.fullmatch(r"\d{4}", value):
+                return value
+    elif isinstance(row, (list, tuple)) and row:
+        value = str(row[0]).strip()
+        if re.fullmatch(r"\d{4}", value):
+            return value
+    return ""
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 3600)
+def fetch_taiwan_stock_universe() -> list[str]:
+    """取得台股上市 / 上櫃普通股清單，失敗時回退到內建常用清單。"""
+    tickers: list[str] = []
+
+    sources = [
+        ("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", ".TW"),
+        ("https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json", ".TW"),
+        ("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes", ".TWO"),
+        ("https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics", ".TWO"),
+    ]
+
+    for url, suffix in sources:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                payload = resp.read().decode("utf-8-sig", errors="ignore")
+            data = json.loads(payload)
+
+            if isinstance(data, list):
+                rows = data
+            elif isinstance(data, dict):
+                rows = data.get("data") or data.get("tables") or data.get("aaData") or []
+            else:
+                rows = []
+
+            for row in rows:
+                code = _extract_stock_code_from_row(row)
+                if code:
+                    tickers.append(f"{code}{suffix}")
+        except Exception:
+            continue
+
+    # 去重並保留順序；只保留 4 碼普通股，不納入 ETF / 權證。
+    cleaned: list[str] = []
+    for ticker in tickers:
+        ticker = normalize_stock_for_yfinance(ticker)
+        base = ticker.split(".")[0]
+        if re.fullmatch(r"\d{4}", base) and ticker not in cleaned:
+            cleaned.append(ticker)
+
+    return cleaned or AUTO_POOL_FALLBACK_TICKERS.copy()
+
+
+def _get_ticker_frame(downloaded: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    if downloaded is None or downloaded.empty:
+        return pd.DataFrame()
+    if isinstance(downloaded.columns, pd.MultiIndex):
+        level0 = list(downloaded.columns.get_level_values(0).unique())
+        level1 = list(downloaded.columns.get_level_values(1).unique())
+        if ticker in level0:
+            return downloaded[ticker].copy()
+        if ticker in level1:
+            return downloaded.xs(ticker, axis=1, level=1).copy()
+        return pd.DataFrame()
+    return downloaded.copy()
+
+
+@st.cache_data(show_spinner="正在自動篩選台股股票池...", ttl=AUTO_POOL_CACHE_HOURS * 3600)
+def get_auto_screened_stock_pool() -> list[str]:
+    """自動股票池：30 日平均成交量 >= 1M，且最新一日相對成交量 >= 1.5。"""
+    tickers = fetch_taiwan_stock_universe()
+    selected: list[str] = []
+    chunk_size = 80
+
+    for start in range(0, len(tickers), chunk_size):
+        chunk = tickers[start:start + chunk_size]
+        try:
+            downloaded = yf.download(
+                " ".join(chunk),
+                period="70d",
+                interval="1d",
+                group_by="ticker",
+                auto_adjust=False,
+                progress=False,
+                threads=True,
+            )
+        except Exception:
+            downloaded = pd.DataFrame()
+
+        for ticker in chunk:
+            frame = _get_ticker_frame(downloaded, ticker)
+            if frame is None or frame.empty or "Volume" not in frame.columns:
+                continue
+
+            volume = pd.to_numeric(frame["Volume"], errors="coerce").dropna()
+            volume = volume[volume > 0]
+            if len(volume) < AUTO_POOL_AVG_VOLUME_DAYS + 1:
+                continue
+
+            latest_volume = float(volume.iloc[-1])
+            avg_volume_30 = float(volume.iloc[-(AUTO_POOL_AVG_VOLUME_DAYS + 1):-1].mean())
+            if not np.isfinite(avg_volume_30) or avg_volume_30 <= 0:
+                continue
+
+            relative_volume = latest_volume / avg_volume_30
+            if avg_volume_30 >= AUTO_POOL_MIN_AVG_VOLUME and relative_volume >= AUTO_POOL_MIN_REL_VOLUME:
+                selected.append(ticker)
+
+    return selected or AUTO_POOL_FALLBACK_TICKERS.copy()
+
+
+def pick_random_auto_stock() -> str:
+    pool = get_auto_screened_stock_pool()
+    return random.choice(pool) if pool else random.choice(AUTO_POOL_FALLBACK_TICKERS)
+
+
 def normalize_room_code(room_code: str) -> str:
     cleaned = "".join(ch for ch in str(room_code).strip().upper() if ch.isalnum() or ch in ["-", "_"])
     return cleaned or "ROOM001"
@@ -663,7 +821,7 @@ def build_battle_questions(room_code: str, interval_label: str, challenge_bars: 
     room = normalize_room_code(room_code)
     q_count = int(np.clip(int(question_count or BATTLE_DEFAULT_QUESTION_COUNT), BATTLE_MIN_QUESTION_COUNT, BATTLE_MAX_QUESTION_COUNT))
     round_no = max(1, int(round_no or 1))
-    base_pool = parse_stock_codes(BATTLE_DEFAULT_POOL_TEXT)
+    base_pool = get_auto_screened_stock_pool()
     rng = random.Random(stable_hash_int(f"BARREPLAY_BATTLE|{room}|ROUND{round_no}|{interval_label}|{challenge_bars}|QCOUNT{q_count}"))
 
     if len(base_pool) >= q_count:
@@ -1690,7 +1848,7 @@ def install_keyboard_shortcuts() -> None:
 
 
 install_keyboard_shortcuts()
-# V35：不使用側邊欄，設定集中於彈窗；趨勢線改為雙向無限延伸。
+# V36：設定集中於彈窗；趨勢線雙向延伸；股票池自動用成交量條件篩選。
 # install_sidebar_toggle_button()
 
 # =========================================================
@@ -2444,7 +2602,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V35_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V36_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2458,12 +2616,31 @@ if st.session_state.get("pending_stock_code") is not None:
 @st.dialog("設定", width="large")
 def render_settings_dialog() -> None:
     st.header("設定")
-    st.caption("版本：V35-infinite-trendline")
+    st.caption("版本：V36-auto-stock-universe")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
-    stock_pool_text = st.text_area("隨機股票池", height=90, key="setting_stock_pool_text")
-    stock_pool = parse_stock_codes(stock_pool_text)
+    st.caption(
+        "股票池改為自動篩選：全台股中 30 日平均成交量 ≥ 1,000,000，"
+        "且最新一日相對成交量 ≥ 1.5。"
+    )
+    pool_col1, pool_col2 = st.columns(2)
+    with pool_col1:
+        if st.button("查看自動股票池", use_container_width=True):
+            auto_pool_preview = get_auto_screened_stock_pool()
+            st.session_state.auto_pool_preview = auto_pool_preview
+    with pool_col2:
+        if st.button("重新掃描股票池", use_container_width=True):
+            try:
+                fetch_taiwan_stock_universe.clear()
+                get_auto_screened_stock_pool.clear()
+            except Exception:
+                pass
+            st.session_state.auto_pool_preview = get_auto_screened_stock_pool()
+    if st.session_state.get("auto_pool_preview"):
+        preview_pool = st.session_state.auto_pool_preview
+        st.caption(f"目前符合條件：{len(preview_pool)} 檔。前 80 檔：")
+        st.code(", ".join(preview_pool[:80]))
 
     if mode == "對戰模式":
         st.markdown("---")
@@ -2665,10 +2842,9 @@ def render_settings_dialog() -> None:
         st.caption("對戰模式由房主開始；開始後玩家從第 1 關作答，禁止回看並有時間限制。")
     else:
         if st.button("隨機開新關卡", use_container_width=True):
-            if stock_pool:
-                st.session_state.pending_stock_code = random.choice(stock_pool)
-                st.session_state.pending_new_challenge = True
-                st.rerun()
+            st.session_state.pending_stock_code = pick_random_auto_stock()
+            st.session_state.pending_new_challenge = True
+            st.rerun()
 
     raw_code_input = st.text_input("目前股票代號", key="stock_code", disabled=(mode == "對戰模式"))
 
@@ -2699,8 +2875,6 @@ with title_col:
 
 # 從 session_state 取得目前設定；設定修改集中在上方彈窗。
 mode = st.session_state.get("setting_mode", DEFAULT_SETTINGS["mode"])
-stock_pool_text = st.session_state.get("setting_stock_pool_text", DEFAULT_SETTINGS["stock_pool_text"])
-stock_pool = parse_stock_codes(stock_pool_text)
 raw_code_input = st.session_state.get("stock_code", DEFAULT_SETTINGS["stock_code"])
 interval_map = {"日線": "1d", "60 分線": "60m", "30 分線": "30m", "15 分線": "15m", "5 分線": "5m"}
 interval_label = st.session_state.get("setting_interval_label", DEFAULT_SETTINGS["interval_label"])
@@ -3024,8 +3198,7 @@ with replay_col6:
             st.session_state.battle_question_no = next_question_no
             reset_question_timer(battle_room_code, battle_player_name, next_question_no)
         else:
-            if stock_pool:
-                st.session_state.pending_stock_code = random.choice(stock_pool)
+            st.session_state.pending_stock_code = pick_random_auto_stock()
         st.session_state.pending_new_challenge = True
         st.rerun()
 
