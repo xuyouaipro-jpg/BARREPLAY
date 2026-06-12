@@ -1,6 +1,6 @@
 # app.py
 # BARREPLAY：類 TradingView 裸 K 闖關復盤系統
-# Deployment version：V28 minimal UI
+# Deployment version：V29 dark fullscreen chart
 
 import base64
 import hashlib
@@ -39,39 +39,76 @@ st.set_page_config(
 )
 
 st.title("BARREPLAY")
-st.caption("裸 K 復盤｜對戰模式｜簡約介面")
+st.caption("裸 K 復盤｜對戰模式｜深色全螢幕介面")
 
 # Minimal UI theme: remove visual noise and keep repeated controls compact.
 st.markdown(
     """
     <style>
+    :root { color-scheme: dark; }
+    html, body, [data-testid="stAppViewContainer"], .stApp {
+        background:#0b0f16 !important;
+        color:#e5e7eb !important;
+    }
     #MainMenu, footer, header {visibility: hidden;}
-    .block-container {padding-top: 1.2rem; padding-bottom: 2.5rem; max-width: 100%;}
-    h1 {font-size: 2.0rem !important; letter-spacing: .02em; font-weight: 850 !important; margin-bottom: .2rem !important;}
-    h2, h3, h4 {font-weight: 800 !important; letter-spacing: .01em;}
-    [data-testid="stCaptionContainer"] {color:#64748b;}
+    .block-container {
+        padding-top: 1.1rem;
+        padding-bottom: 2.5rem;
+        max-width: 100%;
+        background:#0b0f16 !important;
+    }
+    h1 {font-size: 2.0rem !important; letter-spacing:.02em; font-weight:850 !important; margin-bottom:.2rem !important; color:#f8fafc !important;}
+    h2, h3, h4, h5 {font-weight:800 !important; letter-spacing:.01em; color:#f8fafc !important;}
+    p, label, span, div {color:inherit;}
+    [data-testid="stCaptionContainer"] {color:#94a3b8 !important;}
+    hr {border-color:#1f2937 !important; margin:.75rem 0 1rem 0;}
+
+    section[data-testid="stSidebar"] {
+        background:#111827 !important;
+        border-right:1px solid #243244 !important;
+    }
+    section[data-testid="stSidebar"] * {color:#e5e7eb !important;}
+    section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {color:#9ca3af !important;}
+
     div[data-testid="stMetric"] {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: .75rem .85rem;
-        box-shadow: 0 1px 2px rgba(15,23,42,.04);
+        background:#111827 !important;
+        border:1px solid #273449 !important;
+        border-radius:14px;
+        padding:.75rem .85rem;
+        box-shadow:none !important;
     }
-    div[data-testid="stMetricLabel"] {font-size:.82rem; color:#64748b;}
-    div[data-testid="stMetricValue"] {font-size:1.35rem; font-weight:800; color:#111827;}
-    section[data-testid="stSidebar"] {background:#f8fafc; border-right:1px solid #e5e7eb;}
+    div[data-testid="stMetricLabel"] {font-size:.82rem; color:#9ca3af !important;}
+    div[data-testid="stMetricValue"] {font-size:1.35rem; font-weight:800; color:#f8fafc !important;}
+    div[data-testid="stMetricDelta"] {color:#f87171 !important;}
+
     .stButton > button {
-        border-radius: 10px !important;
-        border: 1px solid #d1d5db !important;
-        box-shadow: none !important;
-        font-weight: 700 !important;
+        border-radius:10px !important;
+        border:1px solid #334155 !important;
+        background:#151b26 !important;
+        color:#e5e7eb !important;
+        box-shadow:none !important;
+        font-weight:700 !important;
     }
+    .stButton > button:hover {background:#1f2937 !important; border-color:#475569 !important;}
     .stButton > button[kind="primary"], .stButton > button[data-testid="baseButton-primary"] {
         background:#2563eb !important;
         border-color:#2563eb !important;
+        color:white !important;
     }
-    hr {margin:.75rem 0 1rem 0;}
-    .barreplay-section-note {font-size:.9rem; color:#64748b; margin-top:-.3rem; margin-bottom:.6rem;}
+
+    input, textarea, [data-baseweb="select"] > div, [data-baseweb="input"] > div {
+        background:#0f172a !important;
+        color:#e5e7eb !important;
+        border-color:#334155 !important;
+    }
+    input::placeholder, textarea::placeholder {color:#64748b !important;}
+
+    [data-testid="stSlider"] * {color:#e5e7eb !important;}
+    [data-testid="stCheckbox"] label, [data-testid="stRadio"] label {color:#e5e7eb !important;}
+
+    .barreplay-section-note {font-size:.9rem; color:#94a3b8; margin-top:-.3rem; margin-bottom:.6rem;}
+    .main-account-panel {display:none !important;}
+    .compact-helper {color:#94a3b8; font-size:.92rem;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -2037,7 +2074,7 @@ TV_HTML = r'''
 <style>
 html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;font-family:Arial,"Microsoft JhengHei",sans-serif;}
 #wrap{width:100%;height:__HEIGHT__px;background:#0f131a;border:1px solid rgba(255,255,255,0.08);box-sizing:border-box;}
-#toolbar{height:76px;display:flex;align-items:center;align-content:center;gap:5px;padding:5px 8px;box-sizing:border-box;background:#151a23;border-bottom:1px solid rgba(255,255,255,0.08);user-select:none;overflow-x:visible;white-space:normal;flex-wrap:wrap;}
+#toolbar{height:78px;display:flex;align-items:center;align-content:center;gap:5px;padding:5px 8px;box-sizing:border-box;background:#151a23;border-bottom:1px solid rgba(255,255,255,0.08);user-select:none;overflow-x:visible;white-space:normal;flex-wrap:wrap;}
 .tool-btn{height:28px;padding:0 8px;background:#151b26;color:#cbd5e1;border:1px solid #334155;border-radius:7px;cursor:pointer;font-size:12px;white-space:nowrap;flex:0 0 auto;}
 .tool-btn:hover{background:#1f2937;}.tool-btn.active{background:#2563eb;border-color:#2563eb;color:white;}
 .tool-btn.disabled{opacity:.38;cursor:not-allowed;background:#1b202b;border-color:#2a3040;color:#6f7786;}
@@ -2046,21 +2083,55 @@ html,body{margin:0;padding:0;overflow:hidden;background:#0f131a;color:#d1d4dc;fo
 .action-btn{background:#263047;border-color:#44506a;}
 .trade-btn{background:#2b263a;border-color:#5c4a82;}
 #status{margin-left:8px;font-size:13px;color:#9aa4b2;white-space:nowrap;flex:0 0 auto;}
-#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}#battleOverlay{position:absolute;left:12px;top:12px;z-index:25;display:__OVERLAY_DISPLAY__;min-width:285px;max-width:410px;background:rgba(10,14,22,.82);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:11px 13px;color:#f1f5f9;font-size:13px;line-height:1.56;box-shadow:0 10px 28px rgba(0,0,0,.35);pointer-events:none;}#battleOverlay .big{font-size:22px;font-weight:900;}#battleOverlay .muted{color:#cbd5e1;}#battleOverlay .good{color:#ff6b6b;}#battleOverlay .bad{color:#26c6da;}#battleOverlay .money{font-weight:800;}
+#chartBox{position:relative;width:100%;height:__MAIN_CHART_HEIGHT__px;}#mainChart{position:absolute;inset:0;}#drawCanvas{position:absolute;inset:0;z-index:10;pointer-events:none;}#battleOverlay{position:absolute;left:12px;top:12px;z-index:25;display:__OVERLAY_DISPLAY__;min-width:320px;max-width:455px;background:rgba(8,12,20,.86);backdrop-filter:blur(8px);border:1px solid rgba(148,163,184,.28);border-radius:14px;padding:12px 14px;color:#f8fafc;font-size:13px;line-height:1.58;box-shadow:0 14px 36px rgba(0,0,0,.38);pointer-events:none;}#battleOverlay .big{font-size:24px;font-weight:900;letter-spacing:.02em;}#battleOverlay .muted{color:#cbd5e1;}#battleOverlay .good{color:#ff6b6b;}#battleOverlay .bad{color:#26c6da;}#battleOverlay .money{font-weight:850;color:#f8fafc;}#battleOverlay .overlay-title{font-weight:900;font-size:14px;color:#f8fafc;margin-bottom:3px;}#battleOverlay .overlay-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:12px;row-gap:1px;}#battleOverlay .overlay-progress{height:7px;background:rgba(148,163,184,.20);border-radius:99px;margin:7px 0 8px;overflow:hidden;}#battleOverlay .overlay-progress span{display:block;height:100%;background:#2563eb;border-radius:99px;}#wrap:fullscreen{width:100vw!important;height:100vh!important;border:0;background:#0f131a;}#wrap:fullscreen #toolbar{height:78px;}#wrap:fullscreen #chartBox{height:calc(100vh - 78px - __FS_MACD_HEIGHT__px)!important;}#wrap:fullscreen #macdBox{height:__FS_MACD_HEIGHT__px!important;}#wrap.pseudo-fullscreen{width:100vw!important;height:100vh!important;border:0;background:#0f131a;}#wrap.pseudo-fullscreen #toolbar{height:78px;}#wrap.pseudo-fullscreen #chartBox{height:calc(100vh - 78px - __FS_MACD_HEIGHT__px)!important;}#wrap.pseudo-fullscreen #macdBox{height:__FS_MACD_HEIGHT__px!important;}.fullscreen-btn{background:#1d4ed8!important;border-color:#2563eb!important;color:#fff!important;}
 #macdBox{position:relative;width:100%;height:__MACD_CHART_HEIGHT__px;display:__MACD_DISPLAY__;border-top:1px solid rgba(255,255,255,0.08);}#macdChart{position:absolute;inset:0;}
 </style>
 </head>
 <body>
 <div id="wrap">
 <div id="toolbar">
-<button class="tool-btn active" data-tool="cursor">游標</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">-10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">上一根</button><button class="tool-btn action-btn" data-action="下一根">下一根</button><button class="tool-btn action-btn" data-action="+10">+10</button><button class="tool-btn action-btn" data-action="下一關">下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入做多">買</button><button class="tool-btn trade-btn" data-action="賣出多單">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補空單">補</button><button class="tool-btn trade-btn" data-action="全部平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
+<button class="tool-btn active" data-tool="cursor">游標</button><button class="tool-btn fullscreen-btn" id="fullscreenBtn">全螢幕</button><span class="toolbar-sep"></span><button class="tool-btn action-btn back-btn" data-action="-10" title="對戰模式禁止回看">-10</button><button class="tool-btn action-btn back-btn" data-action="上一根" title="對戰模式禁止回看">上一根</button><button class="tool-btn action-btn" data-action="下一根">下一根</button><button class="tool-btn action-btn" data-action="+10">+10</button><button class="tool-btn action-btn" data-action="下一關">下一關</button><span class="toolbar-sep"></span><button class="tool-btn trade-btn" data-action="買入">買</button><button class="tool-btn trade-btn" data-action="賣出">賣</button><button class="tool-btn trade-btn" data-action="放空">空</button><button class="tool-btn trade-btn" data-action="回補">補</button><button class="tool-btn trade-btn" data-action="平倉">平</button><span class="toolbar-sep"></span><button class="tool-btn" data-tool="trend">趨勢線</button><button class="tool-btn" data-tool="hline">水平線</button><button class="tool-btn" data-tool="vline">垂直線</button><button class="tool-btn" data-tool="rect">矩形</button><button class="tool-btn" data-tool="fib">斐波</button><button class="tool-btn" data-tool="text">文字</button><button class="tool-btn" data-tool="delete">刪除</button><button class="tool-btn" id="clearAll">全清</button><button class="tool-btn" id="exportDrawings">匯出</button><button class="tool-btn" id="importDrawings">匯入</button><span id="status">模式：游標</span>
 </div>
 <div id="chartBox"><div id="mainChart"></div><div id="battleOverlay">__OVERLAY_HTML__</div><canvas id="drawCanvas"></canvas></div><div id="macdBox"><div id="macdChart"></div></div>
 </div>
 <script>
 const candleData=__CANDLES__;const volumeData=__VOLUMES__;const indicatorPayload=__INDICATORS__;const markers=__MARKERS__;const macdPayload=__MACD__;const showMacd=__SHOW_MACD__;const drawingsKey=__DRAWINGS_KEY__;const viewKey=__VIEW_KEY__;const allowBackActions=__ALLOW_BACK_ACTIONS__;const focusMode=__FOCUS_MODE__;
-const chartBox=document.getElementById("chartBox");const canvas=document.getElementById("drawCanvas");const ctx=canvas.getContext("2d");const statusEl=document.getElementById("status");
+const wrap=document.getElementById("wrap");const chartBox=document.getElementById("chartBox");const canvas=document.getElementById("drawCanvas");const ctx=canvas.getContext("2d");const statusEl=document.getElementById("status");
 const timeLabelMap={};candleData.forEach(d=>{timeLabelMap[d.time]=d.label;});
+const fullscreenBtn=document.getElementById("fullscreenBtn");
+let pseudoFullscreen=false;
+function resizeAfterFullscreen(){setTimeout(()=>{try{resizeChart();drawAll();}catch(e){}},80);setTimeout(()=>{try{resizeChart();drawAll();}catch(e){}},280);}
+function setPseudoFullscreen(on){
+    pseudoFullscreen=!!on;
+    try{
+        const frame=window.frameElement;
+        const pdoc=window.parent.document;
+        if(frame){
+            if(on){
+                frame.dataset.brOldStyle=frame.getAttribute("style")||"";
+                frame.style.position="fixed";frame.style.inset="0";frame.style.width="100vw";frame.style.height="100vh";frame.style.zIndex="2147483647";frame.style.border="0";frame.style.background="#0f131a";
+                pdoc.documentElement.style.overflow="hidden";pdoc.body.style.overflow="hidden";
+            }else{
+                frame.setAttribute("style",frame.dataset.brOldStyle||"");
+                pdoc.documentElement.style.overflow="";pdoc.body.style.overflow="";
+            }
+        }
+    }catch(e){}
+    wrap.classList.toggle("pseudo-fullscreen",on);
+    wrap.style.height=on?"100vh":"__HEIGHT__px";
+    if(fullscreenBtn)fullscreenBtn.textContent=on?"離開全螢幕":"全螢幕";
+    resizeAfterFullscreen();
+}
+if(fullscreenBtn){fullscreenBtn.addEventListener("click",async()=>{
+    if(pseudoFullscreen){setPseudoFullscreen(false);return;}
+    try{
+        if(!document.fullscreenElement && wrap.requestFullscreen){await wrap.requestFullscreen();}
+        else if(document.fullscreenElement){await document.exitFullscreen();}
+        else{setPseudoFullscreen(true);}
+    }catch(e){setPseudoFullscreen(true);}resizeAfterFullscreen();
+});}
+document.addEventListener("fullscreenchange",()=>{if(fullscreenBtn)fullscreenBtn.textContent=document.fullscreenElement?"離開全螢幕":"全螢幕";resizeAfterFullscreen();});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&pseudoFullscreen){setPseudoFullscreen(false);}},true);
 if(!allowBackActions){
     document.querySelectorAll('.back-btn').forEach(btn=>{
         btn.classList.add('disabled');
@@ -2125,7 +2196,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
     overlay_signature = hashlib.md5(str(overlay_html).encode("utf-8")).hexdigest()[:10] if overlay_html else "no_overlay"
     chart_signature = f"{ticker}_{interval}_{challenge_id}_{indicator_signature}_{show_macd}_{show_volume}_{overlay_signature}_{len(visible_df)}_{float(visible_df.iloc[-1]['Close']) if len(visible_df) else 0}"
 
-    inner_height = max(300, height - 76)
+    inner_height = max(300, height - 78)
     if show_macd:
         main_chart_height = int(inner_height * 0.74)
         macd_chart_height = inner_height - main_chart_height
@@ -2140,6 +2211,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__MAIN_CHART_HEIGHT__", str(main_chart_height))
         .replace("__MACD_CHART_HEIGHT__", str(macd_chart_height))
         .replace("__MACD_DISPLAY__", macd_display)
+        .replace("__FS_MACD_HEIGHT__", str(180 if show_macd else 0))
         .replace("__CANDLES__", json.dumps(candles, ensure_ascii=False))
         .replace("__VOLUMES__", json.dumps(volumes, ensure_ascii=False))
         .replace("__INDICATORS__", json.dumps(indicators, ensure_ascii=False))
@@ -2153,7 +2225,7 @@ def render_tv_chart(visible_df, indicator_df, selected_indicators, show_volume, 
         .replace("__OVERLAY_DISPLAY__", "block" if overlay_html else "none")
         .replace("__OVERLAY_HTML__", str(overlay_html)))
 
-    html_code = f"<!-- BARREPLAY_V23_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
+    html_code = f"<!-- BARREPLAY_V29_CHART_SIGNATURE:{chart_signature} -->\n" + html_code
     components.html(html_code, height=height + 10, scrolling=False)
 
 # =========================================================
@@ -2165,7 +2237,7 @@ if st.session_state.get("pending_stock_code") is not None:
 
 with st.sidebar:
     st.header("設定")
-    st.caption("版本：V28-minimal-ui")
+    st.caption("版本：V29-dark-fullscreen-overlay")
 
     mode = st.radio("模式", ["闖關模式", "自選練習", "對戰模式"], key="setting_mode")
 
@@ -2748,20 +2820,12 @@ st.caption("快捷鍵：→ 下一根；對戰模式禁止回看。")
 # =========================================================
 # 11. Account / Trade Panel
 # =========================================================
-st.markdown("#### 帳戶")
-a1, a2, a3, a4, a5, a6, a7 = st.columns(7)
-a1.metric("可用現金", f"{st.session_state.cash:,.0f}")
-a2.metric("目前持倉", get_position_label())
-a3.metric("平均成本 / 放空價", f"{st.session_state.avg_cost:.2f}")
-a4.metric("未實現損益", f"{unrealized_pnl:,.0f}")
-a5.metric("已實現損益", f"{st.session_state.realized_pnl:,.0f}")
-a6.metric("融券擔保", f"{get_short_collateral():,.0f}")
-a7.metric("融券維持率", "--" if short_maintenance_rate is None else f"{short_maintenance_rate:.2f}%")
+st.markdown("#### 交易設定")
+st.caption("帳戶資訊已整合到 K 線圖左上角；全螢幕時仍可看到帳戶、進度與下單工具。")
 
 if short_maintenance_rate is not None:
     st.caption(
-        f"台股融券模擬：放空時賣出價款會凍結，另扣 90% 融券保證金；"
-        f"目前最多可再新增放空 {max_new_short_lots} 張。"
+        f"融券維持率：{short_maintenance_rate:.2f}%｜最多可再新增放空 {max_new_short_lots} 張"
     )
     if short_maintenance_rate < TW_MIN_MAINTENANCE_RATE * 100:
         st.error("融券維持率低於 130%，不能再加空，只能回補或平倉。")
@@ -2826,33 +2890,46 @@ visible_end = st.session_state.challenge_end_idx if st.session_state.show_answer
 visible_df = df.iloc[visible_start: visible_end + 1]
 challenge_id = f"{st.session_state.challenge_start_idx}_{st.session_state.challenge_end_idx}"
 
-battle_overlay_html = ""
+chart_overlay_html = ""
 chart_focus_mode = mode == "對戰模式" and battle_room_started
-if chart_focus_mode:
-    pnl_class = "good" if return_pct >= 0 else "bad"
+pnl_class = "good" if return_pct >= 0 else "bad"
+progress_pct = min(max(bars_passed / max(bars_total, 1) * 100.0, 0.0), 100.0)
+account_profit = total_equity - initial_cash
+cash_now = float(st.session_state.get("cash", 0.0))
+realized_now = float(st.session_state.get("realized_pnl", 0.0))
+avg_cost_now = float(st.session_state.get("avg_cost", 0.0))
+collateral_now = float(get_short_collateral())
+maintenance_text = "--" if short_maintenance_rate is None else f"{short_maintenance_rate:.2f}%"
+deadline_ms = 0
+
+if mode == "對戰模式" and battle_room_started:
     timer_text = "結束" if battle_game_over else (battle_time_status.get("time_text", "--") if battle_time_status else "--")
-    deadline_ms = 0
     try:
         if battle_time_status and battle_time_status.get("deadline"):
             deadline_ms = int(battle_time_status["deadline"].timestamp() * 1000)
     except Exception:
         deadline_ms = 0
-    account_profit = total_equity - initial_cash
-    cash_now = float(st.session_state.get("cash", 0.0))
-    realized_now = float(st.session_state.get("realized_pnl", 0.0))
-    avg_cost_now = float(st.session_state.get("avg_cost", 0.0))
-    collateral_now = float(get_short_collateral())
-    battle_overlay_html = (
-        f"<div class='muted'>房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題｜第 {battle_round_no} 局</div>"
-        f"<div class='muted'>剩餘時間</div><div class='big'><span id='battleTimerText' data-deadline-ms='{deadline_ms}'>{timer_text}</span></div>"
-        f"<div>可用現金：<span class='money'>{cash_now:,.0f}</span> 元</div>"
-        f"<div>總資產：<span class='money'>{total_equity:,.0f}</span> 元</div>"
-        f"<div>目前損益：<span class='{pnl_class}'>{account_profit:+,.0f} 元（{return_pct:.2f}%）</span></div>"
-        f"<div>持倉：{get_position_label()}｜均價 {avg_cost_now:.2f}</div>"
-        f"<div>未實現：{unrealized_pnl:+,.0f}｜已實現：{realized_now:+,.0f}</div>"
-        f"<div>融券擔保：{collateral_now:,.0f} 元</div>"
-    )
+    overlay_title = f"房間 {battle_room_code}｜第 {battle_question_no}/{battle_question_count} 題｜第 {battle_round_no} 局"
+    timer_html = f"<div class='muted'>剩餘時間</div><div class='big'><span id='battleTimerText' data-deadline-ms='{deadline_ms}'>{timer_text}</span></div>"
+else:
+    overlay_title = f"{show_title}｜{show_time}"
+    timer_html = f"<div class='muted'>進度</div><div class='big'>{bars_passed} / {bars_total}</div>"
 
+chart_overlay_html = (
+    f"<div class='overlay-title'>{escape(str(overlay_title))}</div>"
+    f"{timer_html}"
+    f"<div class='overlay-progress'><span style='width:{progress_pct:.1f}%'></span></div>"
+    f"<div class='overlay-grid'>"
+    f"<div>可用現金</div><div class='money'>{cash_now:,.0f}</div>"
+    f"<div>總資產</div><div class='money'>{total_equity:,.0f}</div>"
+    f"<div>目前損益</div><div><span class='{pnl_class}'>{account_profit:+,.0f}（{return_pct:.2f}%）</span></div>"
+    f"<div>持倉</div><div>{escape(str(get_position_label()))}</div>"
+    f"<div>均價 / 放空價</div><div>{avg_cost_now:.2f}</div>"
+    f"<div>未實現 / 已實現</div><div>{unrealized_pnl:+,.0f} / {realized_now:+,.0f}</div>"
+    f"<div>融券擔保</div><div>{collateral_now:,.0f}</div>"
+    f"<div>融券維持率</div><div>{maintenance_text}</div>"
+    f"</div>"
+)
 render_tv_chart(
     visible_df=visible_df,
     indicator_df=visible_df,
@@ -2868,7 +2945,7 @@ render_tv_chart(
     challenge_id=challenge_id,
     height=chart_height,
     allow_back_actions=allow_back_actions,
-    overlay_html=battle_overlay_html,
+    overlay_html=chart_overlay_html,
     focus_mode=chart_focus_mode,
 )
 
